@@ -1,0 +1,6 @@
+# Sample Regex Input File
+# One regex per line
+
+# Match 'a' or 'b'
+a|b
+
