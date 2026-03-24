@@ -51,3 +51,74 @@ Every time the NFA engine finishes a string (newline received), the FPGA sends o
 
 ```text
 MATCH=<N-bit binary> BYTES=<8 hex digits> HITS=<4hex per regex, comma-separated>\r\n
+```
+
+Example (6 regexes, regexes 0 and 2 matched, 71 total bytes processed):
+
+```text
+MATCH=000101 BYTES=00000047 HITS=0003,0001,0012,0000,0000,0000
+```
+
+Send `?` at any time to query the current counters without feeding any character to the NFA.
+
+### Hardware Counters
+
+- `byte_count [31:0]` — total bytes fed into the NFA engine since the last reset.
+- `match_count_k [15:0]` — cumulative match events for regex _k_ (independent counter per regex).
+
+## 5. System Scope
+
+### Minimum System (Commitment)
+
+- C++ Verilog Emitter compiling basic literal and concatenation patterns (e.g., abc).
+- At least one generated Verilog FSM successfully simulated and executing correctly on the FPGA.
+
+### Goal System — **ACHIEVED**
+
+- Full compiler support for complex operators (`*`, `+`, `?`, `|`, `.`) via Glushkov's epsilon-free construction.
+- Integration of up to 16 parallel FSM modules passing the C++ golden reference testbenches.
+- UART host-side controller: host application sends arbitrary test strings and receives match bitmasks over serial in real time.
+- **UART Transmitter** (`uart_tx.v`): dedicated TX module with a serializer state machine that formats and sends structured ASCII result packets.
+- **Input FIFO Buffer** (`uart_rx_fifo.v`): 16-byte circular FIFO decouples the UART receiver from the NFA engine FSM, eliminating byte-drop risk.
+- **Hardware Counters**: `byte_count` and per-regex `match_count` registers, queryable via UART or the Python TUI.
+
+### Stretch Goal
+
+- Bounded quantifiers `{m,n}`: compiler and hardware support for repetition counts.
+- Live FIX message demo: stream a recorded FIX log from the host and demonstrate real-time field extraction.
+
+## 6. Design Goals
+
+- **Latency**: 1 clock cycle per ASCII character; match output registered on the cycle immediately following `end_of_str` assertion.
+- **Throughput**: 1 byte per clock cycle continuously (100 MB/s at 100 MHz).
+- **Resource usage**: Efficient one-hot state encoding (exactly N+1 flip-flops per FSM).
+- **Correctness**: 100% full-match accuracy against the C++ `std::regex` golden reference.
+
+## 7. Quick Start
+
+### Build the C++ compiler and generate Verilog
+
+```bash
+make run   # builds regex_builder, runs it on inputs/regexes.txt
+```
+
+### Simulate in Vivado
+
+```bash
+make sim   # xvlog + xelab + xsim
+```
+
+### Synthesise and program the Nexys A7
+
+```bash
+make synth    # runs synth.tcl through Vivado batch mode
+make program  # programs the attached FPGA
+```
+
+### Launch the Python TUI
+
+```bash
+pip install pyserial rich
+python tui.py --port /dev/ttyUSB0 --regexes inputs/regexes.txt
+# On Windows: python tui.py --port COM3 --regexes inputs/regexes.txt
+```

@@ -8,3 +8,18 @@ Modern financial markets generate enormous volumes of structured text — orders
 
 ## Key Use Cases in Quantitative Finance
 
+**FIX Protocol Parsing.** Every order, cancel, and fill in electronic trading is an ASCII FIX message. Filtering and validating millions of these per second in hardware means routing decisions are made before the message reaches software — shaving off critical microseconds.
+
+**Market Data Feed Filtering.** Exchanges blast full order book updates at millions of events per second. Running regex matches in hardware lets firms discard irrelevant instruments at line rate, so the CPU only processes what the strategy actually needs.
+
+**Tick Data Pattern Detection.** Price movement sequences — bid size spikes, spread collapses, momentum signals — can be encoded as regex patterns over a tokenised tick stream. Hardware detection latency is measured in nanoseconds, not microseconds.
+
+**News and Sentiment Feeds.** Scanning incoming Reuters or Bloomberg text for company names, earnings figures, or central bank language is a multi-regex problem. An FPGA can flag a relevant news item before the full message has even arrived.
+
+**Trade Surveillance and Compliance.** Patterns like spoofing, layering, and wash trading are detectable as sequences in live order flow. Hardware matching enables real-time compliance checks on the live feed rather than retrospective analysis on stored logs.
+
+---
+
+## Why FPGA and Not Just Faster Software?
+
+The fundamental advantage is parallelism. A software engine checks N regexes sequentially — throughput degrades linearly as N grows. An FPGA runs all N FSMs in the same clock cycle, so throughput is flat regardless of how many patterns are active. At scale, no amount of SIMD optimisation closes that gap.
