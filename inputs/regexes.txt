@@ -1,0 +1,20 @@
+# Sample Regex Input File
+# One regex per line
+
+# Match 'a' or 'b'
+a|b
+
+# Match 'a' followed by zero or more 'b's, then 'c'
+ab*c
+
+# Match one or more 'a' or 'b', then optionally 'c'
+(a|b)+c?
+
+# Match 'a', then any character, then 'b'
+a.b
+
+# Match literal 'abc'
+abc
+
+# Match complex nested expression
+(a|b)*c(d|e)+

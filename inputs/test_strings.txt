@@ -1,0 +1,20 @@
+# Test Strings
+# Each line is a test string
+a
+b
+c
+aa
+ab
+ac
+abc
+abbc
+abbbc
+aaaa
+bbbb
+x
+axb
+ayb
+(a|b)
+abc
+abcd
+abce
