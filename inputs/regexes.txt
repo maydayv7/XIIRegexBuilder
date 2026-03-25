@@ -4,3 +4,12 @@
 # Match 'a' or 'b'
 a|b
 
+# Match 'a' followed by zero or more 'b's, then 'c'
+ab*c
+
+# Match one or more 'a' or 'b', then optionally 'c'
+(a|b)+c?
+
+# Match 'a', then any character, then 'b'
+a.b
+
