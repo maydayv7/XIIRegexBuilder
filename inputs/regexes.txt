@@ -13,3 +13,8 @@ ab*c
 # Match 'a', then any character, then 'b'
 a.b
 
+# Match literal 'abc'
+abc
+
+# Match complex nested expression
+(a|b)*c(d|e)+

@@ -13,3 +13,8 @@ aaaa
 bbbb
 x
 axb
+ayb
+(a|b)
+abc
+abcd
+abce
