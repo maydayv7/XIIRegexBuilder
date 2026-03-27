@@ -70,3 +70,25 @@ int main(int argc, char* argv[]) {
     }
 
     for (const auto& testStr : testStrings) {
+        std::string mask = "";
+        for (size_t i = 0; i < regexes.size(); ++i) {
+            bool matches = false;
+            try {
+                // std::regex_match does full match.
+                std::regex re(regexes[i]);
+                matches = std::regex_match(testStr, re);
+            } catch (const std::regex_error& e) {
+                // Ignore syntax mismatch
+            }
+            mask += (matches ? "1" : "0");
+        }
+        // Reverse mask so bit 0 is on the right (Verilog convention)
+        std::reverse(mask.begin(), mask.end());
+        outFile << mask << "\n";
+    }
+    outFile.close();
+
+    std::cout << "Golden reference generated: " << outputFilename << " (" << testStrings.size() << " test cases)" << std::endl;
+
+    return 0;
+}
