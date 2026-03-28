@@ -6,11 +6,6 @@
 #include <memory>
 #include "nfa.h"
 
-struct TestCase {
-    std::string input;
-    std::vector<bool> expectedMatches;
-};
-
 class Emitter {
 public:
     explicit Emitter(const std::vector<std::unique_ptr<NFA>>& nfas);
@@ -18,6 +13,8 @@ public:
     /**
      * @brief Emits all Verilog files (nfa_*.v, top.v, tb_top.v) to the specified directory.
      * @param outputDir Directory where files will be written.
+     * @param testStrings Optional test strings for the testbench.
+     * @param expectedMatches Optional expected match masks for the testbench.
      */
     void emit(const std::string& outputDir, 
               const std::vector<std::string>& testStrings = {}, 
@@ -25,7 +22,6 @@ public:
 
 private:
     const std::vector<std::unique_ptr<NFA>>& nfas;
-    std::vector<TestCase> testCases;
 
     void emitNFAModule(const NFA& nfa, const std::string& outputDir) const;
     void emitTopModule(const std::string& outputDir) const;

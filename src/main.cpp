@@ -4,12 +4,13 @@
 #include <vector>
 #include <memory>
 #include <regex>
+#include <algorithm>
 #include "lexer.h"
 #include "parser.h"
 #include "nfa.h"
 #include "emitter.h"
 
-std::string trimLine(const std::string& str) {
+std::string trim(const std::string& str) {
     size_t first = str.find_first_not_of(" \t\r\n");
     if (first == std::string::npos) return "";
     size_t last = str.find_last_not_of(" \t\r\n");
@@ -18,33 +19,22 @@ std::string trimLine(const std::string& str) {
 
 int main(int argc, char* argv[]) {
     if (argc < 2) {
-        std::cerr << "Usage: " << argv[0] << " <regex_file> [output_dir] [test_strings_file]" << std::endl;
+        std::cerr << "Usage: " << argv[0] << " <regex_file> [test_strings_file] [output_dir]" << std::endl;
         return 1;
     }
 
     std::string regexFilename = argv[1];
-    std::string outputDir = (argc > 2) ? argv[2] : "output";
-    std::string testFilename = (argc > 3) ? argv[3] : "";
+    std::string testFilename = (argc > 2) ? argv[2] : "";
+    std::string outputDir = (argc > 3) ? argv[3] : "output";
+
+    if (testFilename == "-" || testFilename == "none") {
+        testFilename = "";
+    }
 
     std::ifstream regexFile(regexFilename);
     if (!regexFile.is_open()) {
         std::cerr << "Failed to open regex file: " << regexFilename << std::endl;
         return 1;
-    }
-
-    std::vector<std::string> testStrings;
-    if (!testFilename.empty()) {
-        std::ifstream testFile(testFilename);
-        if (testFile.is_open()) {
-            std::string tLine;
-            while (std::getline(testFile, tLine)) {
-                std::string trimmed = trim(tLine);
-                if (trimmed.empty() || trimmed[0] == '#') continue;
-                testStrings.push_back(trimmed);
-            }
-        } else {
-            std::cerr << "Warning: Could not open test strings file: " << testFilename << std::endl;
-        }
     }
 
     std::string line;
@@ -57,7 +47,7 @@ int main(int argc, char* argv[]) {
 
     while (std::getline(regexFile, line)) {
         lineNum++;
-        std::string trimmedLine = trimLine(line);
+        std::string trimmedLine = trim(line);
         if (trimmedLine.empty() || trimmedLine[0] == '#') continue;
 
         rawRegexes.push_back(trimmedLine);
@@ -92,6 +82,11 @@ int main(int argc, char* argv[]) {
             while (std::getline(testFile, tline)) {
                 size_t last = tline.find_last_not_of("\r\n");
                 std::string s = (last != std::string::npos) ? tline.substr(0, last + 1) : (tline.empty() ? "" : tline);
+                
+                // Skip comments and truly blank lines
+                if (!s.empty() && s[0] == '#') continue;
+                if (s.empty() && trim(tline).empty()) continue;
+
                 testStrings.push_back(s);
                 
                 // Generate expected matches using std::regex
@@ -104,7 +99,6 @@ int main(int argc, char* argv[]) {
                     } catch (...) {}
                     mask += (match ? "1" : "0");
                 }
-                // Reverse mask for Verilog indexing (bit 0 is first regex)
                 std::reverse(mask.begin(), mask.end());
                 expectedMatches.push_back(mask);
             }
@@ -117,7 +111,7 @@ int main(int argc, char* argv[]) {
     Emitter emitter(nfas);
     emitter.emit(outputDir, testStrings, expectedMatches);
 
-    std::cout << "Pipeline complete." << std::endl;
+    std::cout << "Pipeline complete. Verilog files emitted to '" << outputDir << "/'" << std::endl;
 
     return 0;
 }

@@ -4,6 +4,7 @@
 #include <vector>
 #include <regex>
 #include <iomanip>
+#include <algorithm>
 
 std::string trim(const std::string& str) {
     size_t first = str.find_first_not_of(" \t\r\n");
@@ -45,18 +46,20 @@ int main(int argc, char* argv[]) {
 
     std::vector<std::string> testStrings;
     while (std::getline(testFile, line)) {
-        // Test strings might have spaces, but usually they are one per line.
-        // We trim only trailing \r\n to preserve leading/trailing spaces if they are part of the test.
+        // Remove trailing \r\n
         size_t last = line.find_last_not_of("\r\n");
-        if (last != std::string::npos) {
-            testStrings.push_back(line.substr(0, last + 1));
-        } else if (!line.empty()) {
-             testStrings.push_back("");
-        } else {
-             // Blank line in test file? Spec says "Each line is one test string".
-             // We'll treat blank lines as empty strings.
-             testStrings.push_back("");
+        std::string s = (last != std::string::npos) ? line.substr(0, last + 1) : (line.empty() ? "" : line);
+        
+        // Skip comments and blank lines if desired, but spec says "Each line is one test string"
+        // Let's at least skip the comment headers if they start with #
+        if (!s.empty() && s[0] == '#') continue;
+        if (s.empty()) {
+            // Check if it's truly a blank line (might be intentional empty string test)
+            // For safety, let's only skip if the raw line was empty or just whitespace
+            if (trim(line).empty()) continue;
         }
+
+        testStrings.push_back(s);
     }
     testFile.close();
 
@@ -67,25 +70,25 @@ int main(int argc, char* argv[]) {
     }
 
     for (const auto& testStr : testStrings) {
+        std::string mask = "";
         for (size_t i = 0; i < regexes.size(); ++i) {
             bool matches = false;
             try {
-                // Convert our regex syntax to ECMAScript (default for std::regex)
-                // Our syntax is mostly compatible, but '.' matches any char including \n in some engines.
                 // std::regex_match does full match.
                 std::regex re(regexes[i]);
                 matches = std::regex_match(testStr, re);
             } catch (const std::regex_error& e) {
-                // If std::regex doesn't like it, we might have a syntax mismatch.
-                // But for standard operators like *, +, ?, |, (), it should be fine.
+                // Ignore syntax mismatch
             }
-            outFile << (matches ? "1" : "0");
+            mask += (matches ? "1" : "0");
         }
-        outFile << "\n";
+        // Reverse mask so bit 0 is on the right (Verilog convention)
+        std::reverse(mask.begin(), mask.end());
+        outFile << mask << "\n";
     }
     outFile.close();
 
-    std::cout << "Golden reference generated: " << outputFilename << std::endl;
+    std::cout << "Golden reference generated: " << outputFilename << " (" << testStrings.size() << " test cases)" << std::endl;
 
     return 0;
 }
