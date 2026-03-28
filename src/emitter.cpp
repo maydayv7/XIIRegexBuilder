@@ -306,3 +306,95 @@ void Emitter::emitTestbench(const std::vector<std::unique_ptr<NFA>> &nfas,
         << "        #20 rst = 0; #10;\n\n";
 
     for (size_t i = 0; i < testStrings.size(); ++i)
+    {
+        const std::string &s = testStrings[i];
+        out << "        // Test case " << i << ": \"" << s << "\"\n"
+            << "        start = 1; #10 start = 0;\n";
+
+        for (char c : s)
+        {
+            out << "        char_in = 8'h" << std::hex << std::setw(2) << std::setfill('0')
+                << static_cast<int>(static_cast<unsigned char>(c)) << std::dec << "; #10;\n";
+        }
+
+        out << "        end_of_str = 1; #10;\n";
+        out << "        // Match output is valid on the cycle immediately following end_of_str assertion\n";
+
+        if (i < expectedMatches.size())
+        {
+            if (expectedMatches[i].length() != numNFAs)
+            {
+                throw std::runtime_error(
+                    "Testbench generation error: expected_matches[" + std::to_string(i) +
+                    "] has length " + std::to_string(expectedMatches[i].length()) +
+                    " but " + std::to_string(numNFAs) + " NFAs exist.");
+            }
+            out << "        if (match_bus === " << numNFAs << "'b" << expectedMatches[i] << ") begin\n"
+                << "            $display(\"PASS: Test case " << i << " ('" << s << "') matches expected mask " << expectedMatches[i] << "\");\n"
+                << "        end else begin\n"
+                << "            $display(\"FAIL: Test case " << i << " ('" << s << "') expected " << expectedMatches[i] << ", got %b\", match_bus);\n"
+                << "        end\n";
+        }
+        else
+        {
+            out << "        $display(\"INFO: Result for '" << s << "': %b\", match_bus);\n";
+        }
+        out << "        end_of_str = 0; #10;\n\n";
+    }
+
+    out << "        $display(\"All tests completed.\");\n"
+        << "        #100; $finish;\n    end\nendmodule\n";
+}
+
+// =============================================================================
+// emitUARTRX — uart_rx.v
+// =============================================================================
+void Emitter::emitUARTRX(const std::filesystem::path &outputDir)
+{
+    auto filePath = outputDir / "uart_rx.v";
+    std::ofstream out(filePath);
+    out.exceptions(std::ofstream::failbit | std::ofstream::badbit);
+
+    out << "`timescale 1ns / 1ps\n\n";
+    out << R"(
+module uart_rx #(
+    parameter CLKS_PER_BIT = 868 // 100 MHz / 115200 Baud
+)(
+    input  wire       clk,
+    input  wire       rx,
+    output reg  [7:0] rx_data,
+    output reg        rx_ready
+);
+    localparam IDLE = 2'b00, START_BIT = 2'b01, DATA_BITS = 2'b10, STOP_BIT = 2'b11;
+    reg [1:0] state = IDLE;
+    reg [9:0] clk_count = 0;
+    reg [2:0] bit_idx = 0;
+
+    always @(posedge clk) begin
+        case (state)
+            IDLE: begin
+                rx_ready <= 1'b0;
+                clk_count <= 0;
+                bit_idx <= 0;
+                if (rx == 1'b0) state <= START_BIT;
+            end
+            START_BIT: begin
+                if (clk_count == (CLKS_PER_BIT-1)/2) begin
+                    if (rx == 1'b0) begin
+                        clk_count <= 0;
+                        state <= DATA_BITS;
+                    end else state <= IDLE;
+                end else clk_count <= clk_count + 1;
+            end
+            DATA_BITS: begin
+                if (clk_count < CLKS_PER_BIT-1) begin
+                    clk_count <= clk_count + 1;
+                end else begin
+                    clk_count <= 0;
+                    rx_data[bit_idx] <= rx;
+                    if (bit_idx < 7) bit_idx <= bit_idx + 1;
+                    else state <= STOP_BIT;
+                end
+            end
+            STOP_BIT: begin
+                if (clk_count < CLKS_PER_BIT-1) begin
