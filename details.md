@@ -121,5 +121,3 @@ A fully functional testbench (`tb_top.v`) is generated:
 - It integrates **Golden Reference** matches generated via `std::regex`.
 - For each test string, it drives the `start`, `char_in`, and `end_of_str` signals, then validates the `match_bus` against the expected bitmask.
 - It reports `PASS` or `FAIL` for each test case directly in the simulation console and generates a `dump.vcd` for waveform analysis.
-
----
