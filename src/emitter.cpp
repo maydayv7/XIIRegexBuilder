@@ -124,7 +124,7 @@ void Emitter::emitNFAModule(const NFA& nfa, const std::string& outputDir) const 
         << "        end else if (end_of_str) begin\n"
         << "            match <= ";
     
-    bool firstAccept = true;
+    std::vector<std::string> acceptTerms;
     for (const auto& [id, state] : nfa.states) {
         if (state.isAccept) {
             if (!firstAccept) out << " || ";

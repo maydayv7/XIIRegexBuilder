@@ -28,8 +28,23 @@ int main(int argc, char* argv[]) {
 
     std::ifstream regexFile(regexFilename);
     if (!regexFile.is_open()) {
-        std::cerr << "Failed to open " << regexFilename << std::endl;
+        std::cerr << "Failed to open regex file: " << regexFilename << std::endl;
         return 1;
+    }
+
+    std::vector<std::string> testStrings;
+    if (!testFilename.empty()) {
+        std::ifstream testFile(testFilename);
+        if (testFile.is_open()) {
+            std::string tLine;
+            while (std::getline(testFile, tLine)) {
+                std::string trimmed = trim(tLine);
+                if (trimmed.empty() || trimmed[0] == '#') continue;
+                testStrings.push_back(trimmed);
+            }
+        } else {
+            std::cerr << "Warning: Could not open test strings file: " << testFilename << std::endl;
+        }
     }
 
     std::string line;
@@ -58,7 +73,7 @@ int main(int argc, char* argv[]) {
                 nfas.push_back(std::move(nfa));
             }
         } catch (const std::exception& e) {
-            std::cerr << "Error: " << e.what() << std::endl;
+            std::cerr << "Error parsing regex: " << e.what() << std::endl;
         }
     }
 
@@ -102,7 +117,6 @@ int main(int argc, char* argv[]) {
     Emitter emitter(nfas);
     emitter.emit(outputDir, testStrings, expectedMatches);
 
-    std::cout << "Verilog files emitted to '" << outputDir << "/'" << std::endl;
     std::cout << "Pipeline complete." << std::endl;
 
     return 0;

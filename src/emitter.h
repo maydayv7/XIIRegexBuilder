@@ -6,6 +6,11 @@
 #include <memory>
 #include "nfa.h"
 
+struct TestCase {
+    std::string input;
+    std::vector<bool> expectedMatches;
+};
+
 class Emitter {
 public:
     explicit Emitter(const std::vector<std::unique_ptr<NFA>>& nfas);
@@ -20,6 +25,7 @@ public:
 
 private:
     const std::vector<std::unique_ptr<NFA>>& nfas;
+    std::vector<TestCase> testCases;
 
     void emitNFAModule(const NFA& nfa, const std::string& outputDir) const;
     void emitTopModule(const std::string& outputDir) const;
