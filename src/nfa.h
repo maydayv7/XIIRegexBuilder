@@ -36,9 +36,7 @@ public:
     static std::unique_ptr<NFA> build(ASTNode* root, int regexIdx);
 
 private:
-    // Glushkov intermediate steps
-    static void computeFunctions(ASTNode* node, std::map<int, unsigned char>& posToChar, std::map<int, std::set<int>>& followpos);
-    static void linearize(ASTNode* node, int& posCounter, std::map<int, unsigned char>& posToChar);
+    static void linearize(ASTNode* node, int& posCounter, std::map<int, unsigned char>& posToChar, std::set<int>& dotPositions);
     static void computeNullableFirstLast(ASTNode* node);
     static void computeFollowpos(ASTNode* node, std::map<int, std::set<int>>& followpos);
 };

@@ -98,12 +98,23 @@ The `NFA::simulate` method implements a software-based FSM runner:
 - It consumes the input string character-by-character.
 - It returns `true` if any final active state is an acceptance state.
 
-### 2. Running Validation
-Validation is triggered by passing a second argument to the builder:
 
-```bash
-# Run with validation
-./regex_builder regexes.txt test_strings.txt
-```
+## Stage 3 — Verilog Emitter
 
-This will print the match results for every regex against every test string provided in the file.
+This stage transforms the internal NFA structures into synthesizable Verilog HDL code.
+
+### 1. Per-NFA Modules
+For each regular expression, the emitter generates a self-contained Verilog module (`nfa_N.v`):
+- **One-Hot Encoding:** The state register uses one-hot encoding (one flip-flop per NFA state). This is ideal for FPGA implementation as it results in high-speed, shallow combinational logic.
+- **Deterministic Next-State Logic:** Transitions are implemented as pure combinational logic gating the `state_reg` with the 8-bit `char_in`.
+- **Match Logic:** The `match` output is registered and asserted if the FSM is in an acceptance state when `end_of_str` is received.
+
+### 2. Top-Level Wrapper
+A `top.v` module is generated to instantiate all NFA modules in parallel.
+- All modules share the same clock, reset, and input character stream.
+- The results are aggregated into a `match_bus` where each bit corresponds to one regular expression.
+
+### 3. Simulation Testbench
+A skeleton testbench (`tb_top.v`) is provided to facilitate behavioural simulation in tools like Vivado or Icarus Verilog.
+
+---

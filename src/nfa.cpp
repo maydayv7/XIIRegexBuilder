@@ -2,7 +2,8 @@
 #include <iostream>
 #include <algorithm>
 
-int NFABuilder::globalStateCounter = 0;
+// Start at -1 so the first ++globalStateCounter gives 0.
+int NFABuilder::globalStateCounter = -1;
 
 void NFA::addState(int id, bool isAccept) {
     states.emplace(id, NFAState(id, isAccept));
@@ -42,8 +43,9 @@ std::unique_ptr<NFA> NFABuilder::build(ASTNode* root, int regexIdx) {
     
     // 1. Linearization (assign positions to symbols)
     int localPosCounter = 1;
-    std::map<int, unsigned char> posToChar; // 0 is DOT, others are literal chars
-    linearize(root, localPosCounter, posToChar);
+    std::map<int, unsigned char> posToChar;
+    std::set<int> dotPositions;
+    linearize(root, localPosCounter, posToChar, dotPositions);
     int numPositions = localPosCounter - 1;
 
     // 2. Compute nullable, firstpos, lastpos
@@ -58,8 +60,10 @@ std::unique_ptr<NFA> NFABuilder::build(ASTNode* root, int regexIdx) {
 
     // 4. Build NFA states and transitions
     // Glushkov states: 0 (initial) + 1..n
-    // We map these to global IDs
-    int startGlobalId = globalStateCounter;
+    // We map these to global IDs. 
+    // Invariant: after each build(), globalStateCounter equals the highest global ID used.
+    
+    int startGlobalId = ++globalStateCounter;
     nfa->startStateId = startGlobalId;
     std::map<int, int> localToGlobal;
     localToGlobal[0] = startGlobalId;
@@ -70,17 +74,15 @@ std::unique_ptr<NFA> NFABuilder::build(ASTNode* root, int regexIdx) {
         bool isAccept = (root->lastpos.find(i) != root->lastpos.end());
         nfa->addState(localToGlobal[i], isAccept);
     }
-    // Increment for the next NFA to use
-    globalStateCounter++;
 
     // Transitions from state 0
     for (int p : root->firstpos) {
-        unsigned char c = posToChar[p];
-        if (c == 0) { // DOT
-            for (int val = 0; val < 256; ++val) {
+        if (dotPositions.find(p) != dotPositions.end()) { // DOT
+            for (int val = 32; val <= 126; ++val) {
                 nfa->addTransition(localToGlobal[0], static_cast<unsigned char>(val), localToGlobal[p]);
             }
         } else {
+            unsigned char c = posToChar[p];
             nfa->addTransition(localToGlobal[0], c, localToGlobal[p]);
         }
     }
@@ -88,12 +90,12 @@ std::unique_ptr<NFA> NFABuilder::build(ASTNode* root, int regexIdx) {
     // Transitions from state p > 0
     for (int p = 1; p <= numPositions; ++p) {
         for (int q : followpos[p]) {
-            unsigned char c = posToChar[q];
-            if (c == 0) { // DOT
-                for (int val = 0; val < 256; ++val) {
+            if (dotPositions.find(q) != dotPositions.end()) { // DOT
+                for (int val = 32; val <= 126; ++val) {
                     nfa->addTransition(localToGlobal[p], static_cast<unsigned char>(val), localToGlobal[q]);
                 }
             } else {
+                unsigned char c = posToChar[q];
                 nfa->addTransition(localToGlobal[p], c, localToGlobal[q]);
             }
         }
@@ -102,7 +104,7 @@ std::unique_ptr<NFA> NFABuilder::build(ASTNode* root, int regexIdx) {
     return nfa;
 }
 
-void NFABuilder::linearize(ASTNode* node, int& posCounter, std::map<int, unsigned char>& posToChar) {
+void NFABuilder::linearize(ASTNode* node, int& posCounter, std::map<int, unsigned char>& posToChar, std::set<int>& dotPositions) {
     if (!node) return;
     switch (node->type) {
         case ASTNodeType::LITERAL: {
@@ -114,34 +116,34 @@ void NFABuilder::linearize(ASTNode* node, int& posCounter, std::map<int, unsigne
         case ASTNodeType::DOT: {
             auto n = static_cast<DotNode*>(node);
             n->position = posCounter++;
-            posToChar[n->position] = 0; // Use 0 to represent DOT
+            dotPositions.insert(n->position);
             break;
         }
         case ASTNodeType::CONCATENATION: {
             auto n = static_cast<ConcatenationNode*>(node);
-            linearize(n->left.get(), posCounter, posToChar);
-            linearize(n->right.get(), posCounter, posToChar);
+            linearize(n->left.get(), posCounter, posToChar, dotPositions);
+            linearize(n->right.get(), posCounter, posToChar, dotPositions);
             break;
         }
         case ASTNodeType::UNION: {
             auto n = static_cast<UnionNode*>(node);
-            linearize(n->left.get(), posCounter, posToChar);
-            linearize(n->right.get(), posCounter, posToChar);
+            linearize(n->left.get(), posCounter, posToChar, dotPositions);
+            linearize(n->right.get(), posCounter, posToChar, dotPositions);
             break;
         }
         case ASTNodeType::STAR: {
             auto n = static_cast<StarNode*>(node);
-            linearize(n->inner.get(), posCounter, posToChar);
+            linearize(n->inner.get(), posCounter, posToChar, dotPositions);
             break;
         }
         case ASTNodeType::PLUS: {
             auto n = static_cast<PlusNode*>(node);
-            linearize(n->inner.get(), posCounter, posToChar);
+            linearize(n->inner.get(), posCounter, posToChar, dotPositions);
             break;
         }
         case ASTNodeType::OPTIONAL: {
             auto n = static_cast<OptionalNode*>(node);
-            linearize(n->inner.get(), posCounter, posToChar);
+            linearize(n->inner.get(), posCounter, posToChar, dotPositions);
             break;
         }
     }
