@@ -40,3 +40,6 @@
 # debug information files
 *.dwo
 output/
+
+# final executable
+regex_builder
