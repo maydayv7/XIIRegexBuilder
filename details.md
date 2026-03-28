@@ -106,15 +106,18 @@ This stage transforms the internal NFA structures into synthesizable Verilog HDL
 ### 1. Per-NFA Modules
 For each regular expression, the emitter generates a self-contained Verilog module (`nfa_N.v`):
 - **One-Hot Encoding:** The state register uses one-hot encoding (one flip-flop per NFA state). This is ideal for FPGA implementation as it results in high-speed, shallow combinational logic.
-- **Deterministic Next-State Logic:** Transitions are implemented as pure combinational logic gating the `state_reg` with the 8-bit `char_in`.
-- **Match Logic:** The `match` output is registered. It is asserted on the cycle following the `end_of_str` pulse if an acceptance state bit was active in `state_reg` during the pulse. This correctly handles nullable regexes on empty strings.
+- **Optimized Next-State Logic:** Transitions are implemented as pure combinational logic. The emitter groups transitions for the same character to minimize logic depth. **Dot transitions** are efficiently grouped into a single OR-reduction of source states.
+- **Deterministic Output:** Global state IDs are sorted during emission to ensure consistent and deterministic Verilog code generation.
+- **Match Logic:** The `match` output is registered and uses the `next_state` vector to ensure the last character of the input string is correctly accounted for, satisfying full-match semantics.
 
 ### 2. Top-Level Wrapper
 A `top.v` module is generated to instantiate all NFA modules in parallel.
 - All modules share the same clock, reset, and input character stream.
-- The results are aggregated into a `match_bus` where each bit corresponds to one regular expression.
+- The results are aggregated into a `match_bus` where each bit corresponds to one regular expression (Regex $k$ maps to `match_bus[k]`).
 
 ### 3. Simulation Testbench
-A skeleton testbench (`tb_top.v`) is provided to facilitate behavioural simulation in tools like Vivado or Icarus Verilog.
-
----
+A fully functional testbench (`tb_top.v`) is generated:
+- It automatically loads test cases from `test_strings.txt`.
+- It integrates **Golden Reference** matches generated via `std::regex`.
+- For each test string, it drives the `start`, `char_in`, and `end_of_str` signals, then validates the `match_bus` against the expected bitmask.
+- It reports `PASS` or `FAIL` for each test case directly in the simulation console and generates a `dump.vcd` for waveform analysis.

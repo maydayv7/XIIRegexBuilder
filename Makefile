@@ -3,15 +3,18 @@ CFLAGS = -Wall -Wextra -std=c++17 -Isrc
 BUILD_DIR = build
 TARGET = $(BUILD_DIR)/regex_builder
 TESTER = $(BUILD_DIR)/nfa_tester
+GOLDEN = $(BUILD_DIR)/golden
 SRCS = src/main.cpp src/lexer.cpp src/parser.cpp src/nfa.cpp src/emitter.cpp
 TEST_SRCS = src/parser_tester.cpp src/lexer.cpp src/parser.cpp src/nfa.cpp
+GOLDEN_SRCS = src/golden.cpp
 OBJS = $(SRCS:.cpp=.o)
 TEST_OBJS = $(TEST_SRCS:.cpp=.o)
+GOLDEN_OBJS = $(GOLDEN_SRCS:.cpp=.o)
 
 INPUT_DIR = inputs
 OUTPUT_DIR = output
 
-all: $(TARGET)
+all: $(TARGET) $(GOLDEN)
 
 $(TARGET): $(OBJS) | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -o $(TARGET) $(OBJS)
@@ -19,21 +22,30 @@ $(TARGET): $(OBJS) | $(BUILD_DIR)
 $(TESTER): $(TEST_OBJS) | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -o $(TESTER) $(TEST_OBJS)
 
+$(GOLDEN): $(GOLDEN_OBJS) | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -o $(GOLDEN) $(GOLDEN_OBJS)
+
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
+
+$(OUTPUT_DIR):
+	mkdir -p $(OUTPUT_DIR)
 
 %.o: %.cpp
 	$(CC) $(CFLAGS) -c $< -o $@
 
-run: all
+run: all | $(OUTPUT_DIR)
 	./$(TARGET) $(INPUT_DIR)/regexes.txt $(INPUT_DIR)/test_strings.txt $(OUTPUT_DIR)
 
 test: $(TESTER)
 	./$(TESTER) $(INPUT_DIR)/regexes.txt $(INPUT_DIR)/test_strings.txt
+
+golden: $(GOLDEN) | $(OUTPUT_DIR)
+	./$(GOLDEN) $(INPUT_DIR)/regexes.txt $(INPUT_DIR)/test_strings.txt $(OUTPUT_DIR)/expected_matches.txt
 
 clean:
 	rm -f src/*.o
 	rm -rf $(BUILD_DIR)
 	rm -rf $(OUTPUT_DIR)
 
-.PHONY: all run test clean
+.PHONY: all run test golden clean

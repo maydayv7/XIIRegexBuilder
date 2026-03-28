@@ -3,12 +3,13 @@
 #include <string>
 #include <vector>
 #include <memory>
+#include <regex>
 #include "lexer.h"
 #include "parser.h"
 #include "nfa.h"
 #include "emitter.h"
 
-std::string trim(const std::string& str) {
+std::string trimLine(const std::string& str) {
     size_t first = str.find_first_not_of(" \t\r\n");
     if (first == std::string::npos) return "";
     size_t last = str.find_last_not_of(" \t\r\n");
@@ -17,19 +18,13 @@ std::string trim(const std::string& str) {
 
 int main(int argc, char* argv[]) {
     if (argc < 2) {
-        std::cerr << "Usage: " << argv[0] << " <regex_file> [test_strings_file] [output_dir]" << std::endl;
-        std::cerr << "Note: Use '-' for [test_strings_file] if you only want to specify [output_dir]" << std::endl;
+        std::cerr << "Usage: " << argv[0] << " <regex_file> [output_dir] [test_strings_file]" << std::endl;
         return 1;
     }
 
     std::string regexFilename = argv[1];
-    std::string testFilename = (argc > 2) ? argv[2] : "";
-    std::string outputDir = (argc > 3) ? argv[3] : "output";
-
-    // Handle the case where the user wants to skip test strings but provide output dir
-    if (testFilename == "-" || testFilename == "none") {
-        testFilename = "";
-    }
+    std::string outputDir = (argc > 2) ? argv[2] : "output";
+    std::string testFilename = (argc > 3) ? argv[3] : "";
 
     std::ifstream regexFile(regexFilename);
     if (!regexFile.is_open()) {
@@ -56,14 +51,16 @@ int main(int argc, char* argv[]) {
     int lineNum = 0;
     int regexIdx = 0;
     std::vector<std::unique_ptr<NFA>> nfas;
+    std::vector<std::string> rawRegexes;
 
     std::cout << "Starting XIIRegexBuilder pipeline..." << std::endl;
 
     while (std::getline(regexFile, line)) {
         lineNum++;
-        std::string trimmedLine = trim(line);
+        std::string trimmedLine = trimLine(line);
         if (trimmedLine.empty() || trimmedLine[0] == '#') continue;
 
+        rawRegexes.push_back(trimmedLine);
         std::cout << "Processing Regex [" << regexIdx << "]: " << trimmedLine << std::endl;
 
         Lexer lexer(trimmedLine, lineNum);
@@ -85,26 +82,40 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    std::vector<std::string> testStrings;
+    std::vector<std::string> expectedMatches;
+
+    if (!testFilename.empty()) {
+        std::ifstream testFile(testFilename);
+        if (testFile.is_open()) {
+            std::string tline;
+            while (std::getline(testFile, tline)) {
+                size_t last = tline.find_last_not_of("\r\n");
+                std::string s = (last != std::string::npos) ? tline.substr(0, last + 1) : (tline.empty() ? "" : tline);
+                testStrings.push_back(s);
+                
+                // Generate expected matches using std::regex
+                std::string mask = "";
+                for (const auto& re_str : rawRegexes) {
+                    bool match = false;
+                    try {
+                        std::regex re(re_str);
+                        match = std::regex_match(s, re);
+                    } catch (...) {}
+                    mask += (match ? "1" : "0");
+                }
+                // Reverse mask for Verilog indexing (bit 0 is first regex)
+                std::reverse(mask.begin(), mask.end());
+                expectedMatches.push_back(mask);
+            }
+            std::cout << "Loaded " << testStrings.size() << " test strings and generated golden matches." << std::endl;
+        }
+    }
+
     std::cout << "Generated " << nfas.size() << " NFAs. Emitting Verilog..." << std::endl;
 
     Emitter emitter(nfas);
-    
-    // Generate expected matches for the testbench if test strings were provided
-    for (const auto& ts : testStrings) {
-        std::vector<bool> expected;
-        for (const auto& nfa : nfas) {
-            expected.push_back(nfa->simulate(ts));
-        }
-        emitter.addTestCase(ts, expected);
-    }
-
-    try {
-        emitter.emit(outputDir);
-        std::cout << "Verilog files emitted to '" << outputDir << "/'" << std::endl;
-    } catch (const std::exception& e) {
-        std::cerr << "Emission failed: " << e.what() << std::endl;
-        return 1;
-    }
+    emitter.emit(outputDir, testStrings, expectedMatches);
 
     std::cout << "Pipeline complete." << std::endl;
 

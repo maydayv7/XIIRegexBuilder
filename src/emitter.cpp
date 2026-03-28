@@ -1,252 +1,230 @@
 #include "emitter.h"
 #include <fstream>
 #include <iostream>
-#include <map>
-#include <set>
 #include <iomanip>
-#include <filesystem>
-#include <stdexcept>
+#include <sstream>
+#include <algorithm>
+#include <set>
+#include <map>
+#include <sys/stat.h>
 
-namespace fs = std::filesystem;
+#ifdef _WIN32
+#include <direct.h>
+#define mkdir(dir, mode) _mkdir(dir)
+#endif
 
 Emitter::Emitter(const std::vector<std::unique_ptr<NFA>>& nfas) : nfas(nfas) {}
 
-void Emitter::addTestCase(const std::string& input, const std::vector<bool>& matches) {
-    testCases.push_back({input, matches});
-}
-
-void Emitter::emit(const std::string& outputDir) {
-    try {
-        if (!fs::exists(outputDir)) {
-            fs::create_directories(outputDir);
-        }
-    } catch (const fs::filesystem_error& e) {
-        std::cerr << "Error creating output directory: " << e.what() << std::endl;
-        throw;
-    }
+void Emitter::emit(const std::string& outputDir, 
+                   const std::vector<std::string>& testStrings, 
+                   const std::vector<std::string>& expectedMatches) const {
+    ensureDirectory(outputDir);
 
     for (const auto& nfa : nfas) {
         emitNFAModule(*nfa, outputDir);
     }
 
     emitTopModule(outputDir);
-    emitTestbench(outputDir);
+    emitTestbench(outputDir, testStrings, expectedMatches);
 }
 
-void Emitter::emitNFAModule(const NFA& nfa, const std::string& outputDir) {
+void Emitter::emitNFAModule(const NFA& nfa, const std::string& outputDir) const {
     std::string filename = outputDir + "/nfa_" + std::to_string(nfa.regexIndex) + ".v";
-    std::ofstream f(filename);
-    if (!f.is_open()) {
-        std::cerr << "Failed to open " << filename << " for writing." << std::endl;
-        throw std::runtime_error("Could not write NFA module file");
+    std::ofstream out(filename);
+    if (!out.is_open()) {
+        throw std::runtime_error("Could not open " + filename + " for writing.");
     }
 
-    int numStates = nfa.states.size();
-    
+    // Map global state IDs to local indices 0..N
+    std::vector<int> sortedStateIds;
+    for (const auto& pair : nfa.states) {
+        sortedStateIds.push_back(pair.first);
+    }
+    std::sort(sortedStateIds.begin(), sortedStateIds.end());
+
     std::map<int, int> globalToLocal;
-    int idx = 0;
-    globalToLocal[nfa.startStateId] = idx++;
-    for (const auto& [id, state] : nfa.states) {
+    int localIdx = 0;
+    globalToLocal[nfa.startStateId] = localIdx++;
+    for (int id : sortedStateIds) {
         if (id != nfa.startStateId) {
-            globalToLocal[id] = idx++;
+            globalToLocal[id] = localIdx++;
         }
     }
 
-    f << "module nfa_" << nfa.regexIndex << " (\n"
-      << "    input wire clk,\n"
-      << "    input wire rst,\n"
-      << "    input wire start,\n"
-      << "    input wire end_of_str,\n"
-      << "    input wire [7:0] char_in,\n"
-      << "    output reg match\n"
-      << ");\n\n";
+    int numStates = static_cast<int>(nfa.states.size());
+    int startLocalId = 0;
 
-    f << "    // One-hot state register\n"
-      << "    reg [" << numStates - 1 << ":0] state_reg;\n"
-      << "    wire [" << numStates - 1 << ":0] next_state;\n\n";
+    out << "// NFA for regex index " << nfa.regexIndex << "\n";
+    out << "module nfa_" << nfa.regexIndex << " (\n";
+    out << "    input  wire       clk,\n";
+    out << "    input  wire       rst,\n";
+    out << "    input  wire       start,\n";
+    out << "    input  wire       end_of_str,\n";
+    out << "    input  wire [7:0] char_in,\n";
+    out << "    output reg        match\n";
+    out << ");\n\n";
+
+    out << "    reg [" << numStates - 1 << ":0] state_reg;\n";
+    out << "    wire [" << numStates - 1 << ":0] next_state;\n\n";
 
     for (int j = 0; j < numStates; ++j) {
-        f << "    assign next_state[" << j << "] = ";
+        int targetGlobalId = -1;
+        for (const auto& pair : globalToLocal) {
+            if (pair.second == j) { targetGlobalId = pair.first; break; }
+        }
         
-        std::vector<std::string> terms;
-        for (const auto& [srcId, srcState] : nfa.states) {
-            int srcLocal = globalToLocal.at(srcId);
+        std::map<unsigned char, std::vector<int>> incoming;
+        for (const auto& [srcGlobalId, srcState] : nfa.states) {
             for (const auto& [c, dstIds] : srcState.transitions) {
-                for (int dstId : dstIds) {
-                    if (globalToLocal.at(dstId) == j) {
-                        terms.push_back("(state_reg[" + std::to_string(srcLocal) + "] && (char_in == 8'd" + std::to_string((int)c) + "))");
-                    }
+                if (dstIds.count(targetGlobalId)) {
+                    incoming[c].push_back(globalToLocal[srcGlobalId]);
                 }
             }
         }
 
-        if (terms.empty()) {
-            f << "1'b0;\n";
-        } else if (terms.size() == 1) {
-            f << terms[0] << ";\n";
-        } else {
-            f << "(\n";
-            for (size_t t = 0; t < terms.size(); ++t) {
-                f << "        " << terms[t];
-                if (t < terms.size() - 1) f << " ||\n";
+        out << "    assign next_state[" << j << "] = ";
+        if (incoming.empty()) {
+            out << "1'b0;\n";
+        } else if (incoming.size() == 256) {
+            out << "(";
+            auto& srcs = incoming.begin()->second;
+            for (size_t k = 0; k < srcs.size(); ++k) {
+                out << "state_reg[" << srcs[k] << "]";
+                if (k < srcs.size() - 1) out << " | ";
             }
-            f << "\n    );\n";
+            out << "); // DOT transition\n";
+        } else {
+            bool firstChar = true;
+            for (const auto& pair : incoming) {
+                if (!firstChar) out << " ||\n                        ";
+                out << "(char_in == 8'h" << std::hex << std::setw(2) << std::setfill('0') << (int)pair.first << std::dec 
+                    << " && (";
+                for (size_t k = 0; k < pair.second.size(); ++k) {
+                    out << "state_reg[" << pair.second[k] << "]";
+                    if (k < pair.second.size() - 1) out << " | ";
+                }
+                out << "))";
+                firstChar = false;
+            }
+            out << ";\n";
         }
     }
 
-    f << "\n    always @(posedge clk) begin\n"
-      << "        if (rst) begin\n"
-      << "            state_reg <= {" << (numStates > 1 ? "{" + std::to_string(numStates - 1) + "{1'b0}}, " : "") << "1'b1};\n"
-      << "        end else if (start) begin\n"
-      << "            state_reg <= {" << (numStates > 1 ? "{" + std::to_string(numStates - 1) + "{1'b0}}, " : "") << "1'b1};\n"
-      << "        end else begin\n"
-      << "            state_reg <= next_state;\n"
-      << "        end\n"
-      << "    end\n\n";
-
-    f << "    always @(posedge clk) begin\n"
-      << "        if (rst || start) begin\n"
-      << "            match <= 1'b0;\n"
-      << "        end else if (end_of_str) begin\n"
-      << "            match <= ";
+    out << "\n    always @(posedge clk) begin\n"
+        << "        if (rst || start) begin\n"
+        << "            state_reg <= " << numStates << "'b0;\n"
+        << "            state_reg[" << startLocalId << "] <= 1'b1;\n"
+        << "        end else begin\n"
+        << "            state_reg <= next_state;\n"
+        << "        end\n"
+        << "    end\n\n"
+        << "    always @(posedge clk) begin\n"
+        << "        if (rst || start) begin\n"
+        << "            match <= 1'b0;\n"
+        << "        end else if (end_of_str) begin\n"
+        << "            match <= ";
     
     std::vector<std::string> acceptTerms;
     for (const auto& [id, state] : nfa.states) {
         if (state.isAccept) {
-            acceptTerms.push_back("state_reg[" + std::to_string(globalToLocal.at(id)) + "]");
+            if (!firstAccept) out << " || ";
+            out << "next_state[" << globalToLocal[id] << "]";
+            firstAccept = false;
         }
     }
-
-    if (acceptTerms.empty()) {
-        f << "1'b0";
-    } else if (acceptTerms.size() == 1) {
-        f << acceptTerms[0];
-    } else {
-        f << "(\n";
-        for (size_t t = 0; t < acceptTerms.size(); ++t) {
-            f << "                " << acceptTerms[t];
-            if (t < acceptTerms.size() - 1) f << " ||\n";
-        }
-        f << "\n            )";
-    }
-    
-    f << ";\n"
-      << "        end else begin\n"
-      << "            match <= 1'b0;\n"
-      << "        end\n"
-      << "    end\n\n"
-      << "endmodule\n";
+    if (firstAccept) out << "1'b0";
+    out << ";\n"
+        << "        end else begin\n"
+        << "            match <= 1'b0;\n"
+        << "        end\n"
+        << "    end\n\n"
+        << "endmodule\n";
 }
 
-void Emitter::emitTopModule(const std::string& outputDir) {
+void Emitter::emitTopModule(const std::string& outputDir) const {
     std::string filename = outputDir + "/top.v";
-    std::ofstream f(filename);
-    if (!f.is_open()) {
-        std::cerr << "Failed to open " << filename << " for writing." << std::endl;
-        throw std::runtime_error("Could not write top module file");
-    }
-
-    int numNFAs = nfas.size();
-
-    f << "module top (\n"
-      << "    input wire clk,\n"
-      << "    input wire rst,\n"
-      << "    input wire start,\n"
-      << "    input wire end_of_str,\n"
-      << "    input wire [7:0] char_in,\n"
-      << "    output wire [" << (numNFAs > 0 ? numNFAs - 1 : 0) << ":0] match_bus\n"
-      << ");\n\n";
+    std::ofstream out(filename);
+    out << "module top (\n"
+        << "    input  wire        clk,\n"
+        << "    input  wire        rst,\n"
+        << "    input  wire        start,\n"
+        << "    input  wire        end_of_str,\n"
+        << "    input  wire [7:0]  char_in,\n"
+        << "    output wire [" << (nfas.empty() ? 0 : nfas.size() - 1) << ":0] match_bus\n"
+        << ");\n\n";
 
     for (size_t i = 0; i < nfas.size(); ++i) {
-        f << "    nfa_" << nfas[i]->regexIndex << " inst_" << nfas[i]->regexIndex << " (\n"
-          << "        .clk(clk),\n"
-          << "        .rst(rst),\n"
-          << "        .start(start),\n"
-          << "        .end_of_str(end_of_str),\n"
-          << "        .char_in(char_in),\n"
-          << "        .match(match_bus[" << i << "])\n"
-          << "    );\n\n";
+        out << "    nfa_" << nfas[i]->regexIndex << " inst_" << nfas[i]->regexIndex << " (\n"
+            << "        .clk(clk), .rst(rst), .start(start), .end_of_str(end_of_str), .char_in(char_in), .match(match_bus[" << nfas[i]->regexIndex << "])\n"
+            << "    );\n\n";
     }
-
-    f << "endmodule\n";
+    out << "endmodule\n";
 }
 
-void Emitter::emitTestbench(const std::string& outputDir) {
+void Emitter::emitTestbench(const std::string& outputDir, 
+                           const std::vector<std::string>& testStrings, 
+                           const std::vector<std::string>& expectedMatches) const {
     std::string filename = outputDir + "/tb_top.v";
-    std::ofstream f(filename);
-    if (!f.is_open()) {
-        std::cerr << "Failed to open " << filename << " for writing." << std::endl;
-        throw std::runtime_error("Could not write testbench file");
-    }
+    std::ofstream out(filename);
 
-    int numNFAs = nfas.size();
+    out << "`timescale 1ns / 1ps\n\n"
+        << "module tb_top;\n"
+        << "    reg clk, rst, start, end_of_str;\n"
+        << "    reg [7:0] char_in;\n"
+        << "    wire [" << (nfas.empty() ? 0 : nfas.size() - 1) << ":0] match_bus;\n\n"
+        << "    top uut (.clk(clk), .rst(rst), .start(start), .end_of_str(end_of_str), .char_in(char_in), .match_bus(match_bus));\n\n"
+        << "    always #5 clk = ~clk;\n\n"
+        << "    initial begin\n"
+        << "        $dumpfile(\"dump.vcd\");\n"
+        << "        $dumpvars(0, tb_top);\n"
+        << "        clk = 0; rst = 1; start = 0; end_of_str = 0; char_in = 0;\n"
+        << "        #20 rst = 0; #10;\n\n";
 
-    f << "`timescale 1ns / 1ps\n\n"
-      << "module tb_top();\n\n"
-      << "    reg clk;\n"
-      << "    reg rst;\n"
-      << "    reg start;\n"
-      << "    reg end_of_str;\n"
-      << "    reg [7:0] char_in;\n"
-      << "    wire [" << (numNFAs > 0 ? numNFAs - 1 : 0) << ":0] match_bus;\n\n"
-      << "    top uut (\n"
-      << "        .clk(clk),\n"
-      << "        .rst(rst),\n"
-      << "        .start(start),\n"
-      << "        .end_of_str(end_of_str),\n"
-      << "        .char_in(char_in),\n"
-      << "        .match_bus(match_bus)\n"
-      << "    );\n\n"
-      << "    always #5 clk = ~clk;\n\n"
-      << "    task run_test(input string name, input string test_str, input [" << (numNFAs > 0 ? numNFAs - 1 : 0) << ":0] expected);\n"
-      << "        integer i;\n"
-      << "        begin\n"
-      << "            $display(\"Testing [%s]: \\\"%s\\\"\", name, test_str);\n"
-      << "            start = 1;\n"
-      << "            @(posedge clk);\n"
-      << "            start = 0;\n"
-      << "            for (i = 0; i < test_str.len(); i = i + 1) begin\n"
-      << "                char_in = test_str.getc(i);\n"
-      << "                @(posedge clk);\n"
-      << "            end\n"
-      << "            end_of_str = 1;\n"
-      << "            @(posedge clk);\n"
-      << "            end_of_str = 0;\n"
-      << "            @(posedge clk);\n" // Registered output delay
-      << "            if (match_bus === expected) begin\n"
-      << "                $display(\"  PASS: match_bus = %b\", match_bus);\n"
-      << "            end else begin\n"
-      << "                $display(\"  FAIL: match_bus = %b, expected = %b\", match_bus, expected);\n"
-      << "            end\n"
-      << "            #20;\n"
-      << "        end\n"
-      << "    endtask\n\n"
-      << "    initial begin\n"
-      << "        // synthesis translate_off\n"
-      << "        `ifndef SYNTHESIS\n"
-      << "        $dumpfile(\"dump.vcd\");\n"
-      << "        $dumpvars(0, tb_top);\n"
-      << "        `endif\n"
-      << "        // synthesis translate_on\n\n"
-      << "        clk = 0;\n"
-      << "        rst = 1;\n"
-      << "        start = 0;\n"
-      << "        end_of_str = 0;\n"
-      << "        char_in = 0;\n\n"
-      << "        #20 rst = 0;\n"
-      << "        #20;\n\n";
-
-    for (size_t i = 0; i < testCases.size(); ++i) {
-        f << "        run_test(\"Test " << i << "\", \"" << testCases[i].input << "\", " << numNFAs << "'b";
-        for (int j = numNFAs - 1; j >= 0; --j) {
-            f << (testCases[i].expectedMatches[j] ? "1" : "0");
+    for (size_t i = 0; i < testStrings.size(); ++i) {
+        const std::string& s = testStrings[i];
+        out << "        // Test case " << i << ": \"" << s << "\"\n"
+            << "        start = 1; #10 start = 0;\n";
+        
+        if (s.empty()) {
+            out << "        end_of_str = 1; #10 end_of_str = 0;\n";
+        } else {
+            for (size_t j = 0; j < s.length(); ++j) {
+                out << "        char_in = 8'h" << std::hex << std::setw(2) << std::setfill('0') << (int)(unsigned char)s[j] << std::dec << "; ";
+                if (j == s.length() - 1) out << "end_of_str = 1; ";
+                out << "#10; ";
+                if (j == s.length() - 1) out << "end_of_str = 0; ";
+                out << "\n";
+            }
         }
-        f << ");\n";
+        
+        out << "        #10;\n";
+        if (i < expectedMatches.size()) {
+            out << "        if (match_bus === " << nfas.size() << "'b" << expectedMatches[i] << ") "
+                << "$display(\"PASS: Test case " << i << " ('" << s << "') matches expected mask " << expectedMatches[i] << "\");\n"
+                << "        else "
+                << "$display(\"FAIL: Test case " << i << " ('" << s << "') expected " << expectedMatches[i] << ", got %b\", match_bus);\n\n";
+        } else {
+             out << "        $display(\"Result for '" << s << "': %b\", match_bus);\n\n";
+        }
     }
 
-    f << "\n        $display(\"All tests completed.\");\n"
-      << "        #100;\n"
-      << "        $finish;\n"
-      << "    end\n\n"
-      << "endmodule\n";
+    out << "        #100; $finish;\n    end\nendmodule\n";
+}
+
+void Emitter::ensureDirectory(const std::string& dir) {
+    struct stat info;
+    if (stat(dir.c_str(), &info) != 0) {
+#ifdef _WIN32
+        _mkdir(dir.c_str());
+#else
+        mkdir(dir.c_str(), 0777);
+#endif
+    }
+}
+
+std::string Emitter::escapeChar(unsigned char c) {
+    if (c >= 32 && c <= 126 && c != '"' && c != '\\') return std::string(1, (char)c);
+    std::stringstream ss;
+    ss << "\\x" << std::hex << std::setw(2) << std::setfill('0') << (int)c;
+    return ss.str();
 }
