@@ -18,23 +18,22 @@ std::string trim(const std::string& str) {
 int main(int argc, char* argv[]) {
     if (argc < 2) {
         std::cerr << "Usage: " << argv[0] << " <regex_file> [test_strings_file] [output_dir]" << std::endl;
+        std::cerr << "Note: Use '-' for [test_strings_file] if you only want to specify [output_dir]" << std::endl;
         return 1;
     }
 
     std::string regexFilename = argv[1];
-    std::string testFilename = (argc > 2 && std::string(argv[2]).find('/') == std::string::npos && std::string(argv[2]).find('.') != std::string::npos) ? argv[2] : "";
-    std::string outputDir = "output";
+    std::string testFilename = (argc > 2) ? argv[2] : "";
+    std::string outputDir = (argc > 3) ? argv[3] : "output";
 
-    if (argc == 3) {
-        if (testFilename.empty()) outputDir = argv[2];
-    } else if (argc >= 4) {
-        testFilename = argv[2];
-        outputDir = argv[3];
+    // Handle the case where the user wants to skip test strings but provide output dir
+    if (testFilename == "-" || testFilename == "none") {
+        testFilename = "";
     }
 
     std::ifstream regexFile(regexFilename);
     if (!regexFile.is_open()) {
-        std::cerr << "Failed to open " << regexFilename << std::endl;
+        std::cerr << "Failed to open regex file: " << regexFilename << std::endl;
         return 1;
     }
 
@@ -48,6 +47,8 @@ int main(int argc, char* argv[]) {
                 if (trimmed.empty() || trimmed[0] == '#') continue;
                 testStrings.push_back(trimmed);
             }
+        } else {
+            std::cerr << "Warning: Could not open test strings file: " << testFilename << std::endl;
         }
     }
 
@@ -75,7 +76,7 @@ int main(int argc, char* argv[]) {
                 nfas.push_back(std::move(nfa));
             }
         } catch (const std::exception& e) {
-            std::cerr << "Error: " << e.what() << std::endl;
+            std::cerr << "Error parsing regex: " << e.what() << std::endl;
         }
     }
 
@@ -88,7 +89,7 @@ int main(int argc, char* argv[]) {
 
     Emitter emitter(nfas);
     
-    // Generate expected matches for the testbench
+    // Generate expected matches for the testbench if test strings were provided
     for (const auto& ts : testStrings) {
         std::vector<bool> expected;
         for (const auto& nfa : nfas) {
