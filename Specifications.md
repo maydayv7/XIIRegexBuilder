@@ -16,8 +16,9 @@ The pipeline consists of four major stages: regex parsing, NFA construction, Ver
 | Decision | Choice |
 |---|---|
 | Supported operators | Kleene star, plus, optional, union, dot, parentheses, literals |
+| NFA construction algorithm | Glushkov's construction |
 | Architecture | One independent Verilog FSM module per NFA, all running in parallel |
-| ε-transition handling | Retained in the NFA; encoded as combinational pass-through wires in Verilog |
+| ε-transition handling | None — Glushkov's construction produces ε-free NFAs directly |
 | State encoding | One-hot (one flip-flop per NFA state) |
 | Character stream interface | Synchronous; one 8-bit ASCII character per clock cycle |
 | Match semantics | Full match only (the entire input string must satisfy the regex) |
@@ -87,30 +88,76 @@ The parser must detect and report, with a meaningful message and line number:
 
 ---
 
-## 5. Stage 2 — C++ NFA Construction (Thompson's Construction)
+## 5. Stage 2 — C++ NFA Construction (Glushkov's Construction)
 
 ### 5.1 Overview
 
-Thompson's construction is applied to each AST, bottom-up, to produce an NFA. Each sub-NFA produced during the walk has exactly one distinguished start state and exactly one distinguished accept state. This structural invariant is maintained throughout the construction.
+Glushkov's construction is applied to each AST to produce an ε-free NFA. Unlike Thompson's construction, Glushkov's algorithm never introduces ε-transitions. Instead, it works by analysing the positions of symbol occurrences within the regex and computing which positions can follow which others during a match. The resulting NFA has exactly one state per symbol occurrence in the regex, plus one distinguished initial state, and all transitions are labelled with concrete characters.
 
-### 5.2 Construction Rules per AST Node
+This ε-free property means the Verilog emitter requires no combinational ε-closure layer — the next-state logic is entirely registered, which simplifies synthesis and removes combinational depth as a timing concern.
 
-Each node type is handled as follows:
+### 5.2 Step 1 — Linearisation
 
-- **Literal and Dot** — produce a two-state fragment with a single labelled transition from start to accept.
-- **Concatenation** — the accept state of the left fragment is merged with (or connected by ε to) the start state of the right fragment.
-- **Union** — a new start state has ε-transitions to the start states of both branches. A new accept state receives ε-transitions from the accept states of both branches.
-- **Star** — a new start state has ε-transitions to the inner fragment's start state and directly to a new accept state. The inner fragment's accept state has ε-transitions back to the inner fragment's start state and to the new accept state.
-- **Plus** — same as Star except the new start state does not have a direct ε-transition to the new accept state, forcing at least one traversal of the inner fragment.
-- **Optional** — a new start state has ε-transitions to both the inner fragment's start state and the new accept state.
+Each symbol occurrence in the regex (every literal character and every dot) is assigned a unique integer position label, numbered from 1 upwards, in left-to-right order of appearance. Position 0 is reserved for the special initial state and does not correspond to any symbol. Two occurrences of the same character are treated as distinct positions.
 
-### 5.3 NFA Representation
+For example, the regex `ab*a` is linearised as `a₁ b₂* a₃`, yielding positions 1, 2, and 3.
 
-Each NFA is described by a set of numbered states. Each state carries: a unique integer identifier, a Boolean flag indicating whether it is an accept state, a set of labelled transitions (character → destination state), and a set of ε-transitions (unlabelled edges to other states).
+### 5.3 Step 2 — Computing Nullable
 
-### 5.4 Global State Numbering
+For each node in the AST, a Boolean property `nullable` is computed, indicating whether the sub-expression rooted at that node can match the empty string. The rules are:
 
-All NFA states across all N NFAs share a single global numbering space. This avoids identifier collisions when multiple NFAs are emitted into a single project.
+- A Literal or Dot node is never nullable.
+- A Star or Optional node is always nullable.
+- A Plus node is nullable if and only if its inner sub-expression is nullable.
+- A Union node is nullable if either branch is nullable.
+- A Concatenation node is nullable if and only if both sub-expressions are nullable.
+
+### 5.4 Step 3 — Computing Firstpos
+
+For each AST node, `firstpos` is the set of positions that can match the first character of any string accepted by that sub-expression. The rules are:
+
+- A Literal or Dot node at position p has `firstpos = {p}`.
+- A Star, Plus, or Optional node has the same `firstpos` as its inner sub-expression.
+- A Union node has `firstpos` equal to the union of the `firstpos` sets of both branches.
+- A Concatenation node of left and right sub-expressions has `firstpos` equal to the `firstpos` of the left sub-expression, plus the `firstpos` of the right sub-expression if the left sub-expression is nullable.
+
+### 5.5 Step 4 — Computing Lastpos
+
+For each AST node, `lastpos` is the set of positions that can match the last character of any string accepted by that sub-expression. The rules are:
+
+- A Literal or Dot node at position p has `lastpos = {p}`.
+- A Star, Plus, or Optional node has the same `lastpos` as its inner sub-expression.
+- A Union node has `lastpos` equal to the union of the `lastpos` sets of both branches.
+- A Concatenation node of left and right sub-expressions has `lastpos` equal to the `lastpos` of the right sub-expression, plus the `lastpos` of the left sub-expression if the right sub-expression is nullable.
+
+### 5.6 Step 5 — Computing Followpos
+
+For each position p, `followpos(p)` is the set of positions that can immediately follow position p in any match. This set is built by traversing the AST and applying two rules:
+
+- **Concatenation rule:** for every position p in `lastpos` of the left sub-expression of a Concatenation node, add all positions in `firstpos` of the right sub-expression to `followpos(p)`.
+- **Star and Plus rule:** for every position p in `lastpos` of the inner sub-expression of a Star or Plus node, add all positions in `firstpos` of that same inner sub-expression to `followpos(p)`.
+
+All other node types (Union, Optional, Literal, Dot) do not contribute to `followpos` directly.
+
+### 5.7 Step 6 — Building the NFA
+
+With the position functions computed, the NFA is assembled as follows:
+
+- **States:** one state for each position 1 through n (where n is the total number of symbol occurrences), plus state 0 as the initial state.
+- **Start state:** state 0.
+- **Accept states:** all positions in `lastpos` of the root AST node. Additionally, state 0 is an accept state if the root node is nullable (i.e. the regex matches the empty string).
+- **Transitions from state 0:** for each position p in `firstpos` of the root node, add a transition from state 0 on the symbol at position p to state p.
+- **Transitions from state p (p > 0):** for each position q in `followpos(p)`, add a transition from state p on the symbol at position q to state q.
+
+Because dot (`.`) matches any character, transitions labelled with a dot position are expanded to one transition arc per possible input character (all 256 byte values).
+
+### 5.8 NFA Representation
+
+Each NFA is described by a set of numbered states. Each state carries: a unique integer identifier, a Boolean flag indicating whether it is an accept state, and a map from input characters to sets of destination states. There are no ε-transitions. The total number of states for a given regex is exactly equal to the number of symbol occurrences plus one.
+
+### 5.9 Global State Numbering
+
+All NFA states across all N NFAs share a single global numbering space. This avoids identifier collisions when multiple NFAs are emitted into a single Vivado project.
 
 ---
 
@@ -120,17 +167,9 @@ All NFA states across all N NFAs share a single global numbering space. This avo
 
 The emitter walks each NFA and produces a self-contained Verilog module. It also produces a top-level wrapper module and a simulation testbench. All output files are written to the `output/` directory.
 
-### 6.2 ε-Transition Handling in Verilog
+Because Glushkov's construction produces ε-free NFAs, the emitter requires no combinational ε-closure logic. Every transition is labelled with a concrete character, and the next-state logic is a straightforward combinational decode of `char_in` gated by the currently active states. This results in clean, purely registered FSMs with no combinational feedback paths.
 
-ε-transitions are not eliminated before emission. Instead, they are represented as combinational pass-through wires inside each Verilog module. Concretely:
-
-- Each state has a registered bit in the one-hot state register (the "raw" active signal).
-- A combinational "effective active" wire for each state is the OR of the state's own registered bit and the effective active signals of all its ε-predecessors.
-- This combinational layer computes the ε-closure within a single clock cycle, before the next clock edge.
-
-Because Thompson's construction guarantees that ε-cycles only arise in the context of Kleene star and plus loops — which are resolved by the registered state update — the combinational ε-closure layer is acyclic and safe for synthesis.
-
-### 6.3 Per-NFA Module Interface
+### 6.2 Per-NFA Module Interface
 
 Each NFA produces one Verilog module. The module's ports are:
 
@@ -141,15 +180,19 @@ Each NFA produces one Verilog module. The module's ports are:
 - `char_in` — an 8-bit input carrying the current ASCII character.
 - `match` — a registered output that is asserted for one cycle when the FSM is in an accept state at the moment `end_of_str` is asserted.
 
-### 6.4 One-Hot State Encoding
+### 6.3 One-Hot State Encoding
 
-The state register inside each module is one-hot: there is one flip-flop per NFA state. A bit being set means that NFA state is currently active. Because the NFA is non-deterministic, multiple bits may be set simultaneously, faithfully representing the set of NFA states that are active in parallel.
+The state register inside each module is one-hot: there is one flip-flop per NFA state. A bit being set means that NFA state is currently active. Because the NFA is non-deterministic, multiple bits may be set simultaneously, faithfully representing the parallel set of active NFA states.
 
-On reset or on the `start` pulse, the state register is cleared and only the bit corresponding to the NFA's start state is set.
+On reset or on the `start` pulse, the state register is cleared and only the bit corresponding to state 0 (the initial state) is set.
 
-### 6.5 Next-State Logic
+### 6.4 Next-State Logic
 
-The next-state logic is purely combinational. For each state, its next-state bit is the OR over all states that have a transition on the current character to that state, gated by those states being effectively active (including ε-closure). The computed next-state vector is loaded into the state register on the rising clock edge.
+The next-state logic is purely combinational and free of any ε-closure computation. For each state j, its next-state bit is asserted if any currently active state i has a transition to j on the current value of `char_in`. The resulting next-state vector is registered on the rising clock edge.
+
+### 6.5 Match Output Logic
+
+The `match` output is registered. It is asserted on the cycle following the cycle on which `end_of_str` is asserted, provided that at least one accept-state bit is active in the state register at the time `end_of_str` is seen.
 
 ### 6.6 Top-Level Wrapper Module
 
@@ -246,41 +289,41 @@ Each C++ component is tested independently before integration:
 
 - The lexer is verified against a set of regex strings by inspecting the token stream it produces.
 - The parser is verified by comparing its AST output against hand-drawn trees for representative regexes.
-- The NFA builder is verified by drawing the NFA graphs for simple cases and confirming state counts and transition structures match the expected Thompson's construction output.
+- The NFA builder is verified by checking, for representative regexes, that the linearisation is correct, that the firstpos, lastpos, and followpos sets match hand-computed values, and that the resulting state and transition counts equal the number of symbol occurrences plus one.
 - The emitter is verified by compiling its output in Vivado and confirming the modules are syntax-valid.
 
 ### 10.2 Simulation Validation
 
-Every test case in the testbench must produce a match bitmask identical to the golden reference output. Any discrepancy is a bug in the emitter or the NFA construction logic.
+Every test case in the testbench must produce a match bitmask identical to the golden reference output. Any discrepancy is a bug in the NFA construction logic or the emitter.
 
 ### 10.3 Synthesis Validation
 
 After synthesis and implementation, the following are checked:
 
-- No combinational loops reported by Vivado.
+- No combinational loops reported by Vivado (expected to be clean given the ε-free NFA structure).
 - Timing closure achieved at the target clock frequency (10 ns period).
 - One-hot encoding inferred correctly for all state registers (confirmed via synthesis log).
-- Resource utilisation (LUT and FF count) scales reasonably with the number of NFA states.
+- Resource utilisation (LUT and FF count) scales reasonably with the number of symbol occurrences in the regex set.
 
 ---
 
 ## 11. Known Design Constraints and Risks
 
-### 11.1 Combinational ε-Closure Depth
+### 11.1 One-Hot State Register Size
 
-Retaining ε-transitions as combinational logic introduces a chain of OR gates whose depth equals the maximum ε-path length in an NFA. For complex regexes with deeply nested alternations or quantifiers, this chain may become a timing critical path. This should be monitored during synthesis and, if necessary, addressed by inserting pipeline registers or by performing partial ε-closure before emission.
+One-hot encoding allocates one flip-flop per NFA state. Glushkov's construction produces exactly one state per symbol occurrence plus one initial state — generally fewer states than Thompson's construction for the same regex. With fewer than 20 regexes and relatively simple patterns this is not expected to be problematic, but unusually long or repetitive regexes should be monitored for excessive flip-flop usage.
 
-### 11.2 One-Hot State Register Size
+### 11.2 Dot Operator Fan-Out
 
-One-hot encoding allocates one flip-flop per NFA state. Thompson's construction can produce a large number of states for complex regexes (on the order of two states per AST node). With fewer than 20 regexes and relatively simple patterns this is not expected to be problematic, but unusually complex regexes should be monitored for excessive state counts.
+The dot operator (`.`) matches any of the 256 possible byte values. Each dot position in the NFA produces transition arcs to its followpos targets for all 256 input characters. Heavy use of dot in patterns will increase LUT usage in the next-state logic accordingly.
 
-### 11.3 Dot Operator Fan-Out
+### 11.3 Full Match Only
 
-The dot operator (`.`) matches any of the 256 possible byte values. Each dot transition in the NFA produces 256 parallel transition arcs in the Verilog next-state logic. Heavy use of dot in patterns will increase LUT usage accordingly.
+The system performs full-match checking only. Substring search is not supported. Any future extension to substring matching would require changes to how the `start` signal is managed, specifically recycling the FSM from state 0 on every input character.
 
-### 11.4 Full Match Only
+### 11.4 Shared Symbol Positions Across Regexes
 
-The system performs full-match checking only. Substring search is not supported. Any future extension to substring matching would require changes to how the `start` signal is managed (specifically, recycling the FSM from its initial state on every input character).
+Because all N NFAs share a global state numbering space, the emitter must ensure that position labels assigned during linearisation of one regex do not collide with those of another. This is managed by maintaining a running position counter across all regexes during the construction phase.
 
 ---
 
