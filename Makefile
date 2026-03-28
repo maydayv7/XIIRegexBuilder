@@ -1,7 +1,7 @@
 CC = g++
 CFLAGS = -Wall -Wextra -std=c++17 -Isrc
 TARGET = regex_builder
-SRCS = src/main.cpp src/lexer.cpp src/parser.cpp
+SRCS = src/main.cpp src/lexer.cpp src/parser.cpp src/nfa.cpp
 OBJS = $(SRCS:.cpp=.o)
 
 all: $(TARGET)
@@ -13,7 +13,7 @@ $(TARGET): $(OBJS)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 run: all
-	./$(TARGET) regexes.txt
+	./$(TARGET) regexes.txt test_strings.txt
 
 clean:
 	rm -f $(OBJS) $(TARGET)

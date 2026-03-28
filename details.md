@@ -60,16 +60,50 @@ The parser detects and reports the following errors with meaningful messages inc
 
 ---
 
-## Running the Builder
-The tool accepts a regex input file as a command-line argument. It can be compiled and run using the provided `Makefile`:
+## Stage 2 — NFA Construction
+
+This stage converts the Abstract Syntax Tree (AST) into an ε-free Non-deterministic Finite Automaton (NFA) using Glushkov's algorithm.
+
+---
+
+### 1. Glushkov's Algorithm
+The algorithm produces an NFA with exactly $n+1$ states, where $n$ is the number of symbol occurrences (literals or dots) in the regex.
+
+#### Construction Steps:
+1. **Linearization:** Each symbol is assigned a unique integer position (1 to $n$).
+2. **Nullable:** Computes if a sub-expression can match the empty string.
+3. **Firstpos:** The set of positions that can match the first character of a string.
+4. **Lastpos:** The set of positions that can match the last character of a string.
+5. **Followpos:** A map where for each position $p$, it stores the set of positions that can immediately follow it.
+6. **Transitions:** 
+   - State 0 is the start state.
+   - Transitions from state 0 go to all positions in `firstpos` of the root.
+   - Transitions from state $p$ go to all positions in `followpos(p)`.
+
+### 2. Global State Numbering
+To facilitate Stage 3 (Verilog Emitter), every NFA state across all input regular expressions is assigned a **globally unique ID**. This ensures that multiple FSM modules can be instantiated in a single Verilog project without identifier collisions.
+
+### 3. Dot Operator Handling
+The dot (`.`) matches any character. In the NFA, a dot position generates 256 individual transition arcs for every possible byte value (0–255). This ensures the hardware matcher correctly identifies any character in that position.
+
+---
+
+## Validation and Simulation
+
+To ensure the integrity of the regex-to-NFA conversion before hardware generation, the builder includes an optional simulation engine.
+
+### 1. NFA Simulation
+The `NFA::simulate` method implements a software-based FSM runner:
+- It tracks the set of active states simultaneously (handling non-determinism).
+- It consumes the input string character-by-character.
+- It returns `true` if any final active state is an acceptance state.
+
+### 2. Running Validation
+Validation is triggered by passing a second argument to the builder:
 
 ```bash
-# Compile and run with the default 'regexes.txt'
-make run
-
-# Or manually
-g++ -o regex_builder src/main.cpp src/lexer.cpp src/parser.cpp -Isrc
-./regex_builder your_input_file.txt
+# Run with validation
+./regex_builder regexes.txt test_strings.txt
 ```
 
-This will output a visual representation of the AST for each valid regular expression in the input file.
+This will print the match results for every regex against every test string provided in the file.
