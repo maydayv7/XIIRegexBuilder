@@ -19,7 +19,7 @@ $(TESTER): $(TEST_OBJS)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 run: all
-	./$(TARGET) regexes.txt output
+	./$(TARGET) regexes.txt test_strings.txt output
 
 test: $(TESTER)
 	./$(TESTER) regexes.txt test_strings.txt

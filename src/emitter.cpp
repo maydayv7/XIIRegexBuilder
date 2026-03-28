@@ -4,15 +4,26 @@
 #include <map>
 #include <set>
 #include <iomanip>
-#include <cstdlib> // for system()
+#include <filesystem>
+#include <stdexcept>
+
+namespace fs = std::filesystem;
 
 Emitter::Emitter(const std::vector<std::unique_ptr<NFA>>& nfas) : nfas(nfas) {}
 
+void Emitter::addTestCase(const std::string& input, const std::vector<bool>& matches) {
+    testCases.push_back({input, matches});
+}
+
 void Emitter::emit(const std::string& outputDir) {
-    // Portable way to create directory on POSIX/Windows (via shell)
-    std::string mkdirCmd = "mkdir -p " + outputDir;
-    int ret = std::system(mkdirCmd.c_str());
-    (void)ret; // Suppress unused result warning
+    try {
+        if (!fs::exists(outputDir)) {
+            fs::create_directories(outputDir);
+        }
+    } catch (const fs::filesystem_error& e) {
+        std::cerr << "Error creating output directory: " << e.what() << std::endl;
+        throw;
+    }
 
     for (const auto& nfa : nfas) {
         emitNFAModule(*nfa, outputDir);
@@ -25,14 +36,15 @@ void Emitter::emit(const std::string& outputDir) {
 void Emitter::emitNFAModule(const NFA& nfa, const std::string& outputDir) {
     std::string filename = outputDir + "/nfa_" + std::to_string(nfa.regexIndex) + ".v";
     std::ofstream f(filename);
-    if (!f.is_open()) return;
+    if (!f.is_open()) {
+        std::cerr << "Failed to open " << filename << " for writing." << std::endl;
+        throw std::runtime_error("Could not write NFA module file");
+    }
 
     int numStates = nfa.states.size();
     
-    // We map global state IDs to local indices 0..numStates-1 for the one-hot register
     std::map<int, int> globalToLocal;
     int idx = 0;
-    // Ensure start state is index 0
     globalToLocal[nfa.startStateId] = idx++;
     for (const auto& [id, state] : nfa.states) {
         if (id != nfa.startStateId) {
@@ -53,56 +65,71 @@ void Emitter::emitNFAModule(const NFA& nfa, const std::string& outputDir) {
       << "    reg [" << numStates - 1 << ":0] state_reg;\n"
       << "    wire [" << numStates - 1 << ":0] next_state;\n\n";
 
-    // Next state logic
     for (int j = 0; j < numStates; ++j) {
         f << "    assign next_state[" << j << "] = ";
         
-        bool first = true;
-        // Find all transitions into local state j
+        std::vector<std::string> terms;
         for (const auto& [srcId, srcState] : nfa.states) {
-            int srcLocal = globalToLocal[srcId];
+            int srcLocal = globalToLocal.at(srcId);
             for (const auto& [c, dstIds] : srcState.transitions) {
                 for (int dstId : dstIds) {
-                    if (globalToLocal[dstId] == j) {
-                        if (!first) f << " || ";
-                        f << "(state_reg[" << srcLocal << "] && (char_in == 8'd" << (int)c << "))";
-                        first = false;
+                    if (globalToLocal.at(dstId) == j) {
+                        terms.push_back("(state_reg[" + std::to_string(srcLocal) + "] && (char_in == 8'd" + std::to_string((int)c) + "))");
                     }
                 }
             }
         }
-        if (first) f << "1'b0"; // No transitions into this state
-        f << ";\n";
+
+        if (terms.empty()) {
+            f << "1'b0;\n";
+        } else if (terms.size() == 1) {
+            f << terms[0] << ";\n";
+        } else {
+            f << "(\n";
+            for (size_t t = 0; t < terms.size(); ++t) {
+                f << "        " << terms[t];
+                if (t < terms.size() - 1) f << " ||\n";
+            }
+            f << "\n    );\n";
+        }
     }
 
     f << "\n    always @(posedge clk) begin\n"
       << "        if (rst) begin\n"
-      << "            state_reg <= " << numStates << "'b0;\n"
-      << "            state_reg[0] <= 1'b1; // Start state\n"
+      << "            state_reg <= {" << (numStates > 1 ? "{" + std::to_string(numStates - 1) + "{1'b0}}, " : "") << "1'b1};\n"
       << "        end else if (start) begin\n"
-      << "            state_reg <= " << numStates << "'b0;\n"
-      << "            state_reg[0] <= 1'b1;\n"
+      << "            state_reg <= {" << (numStates > 1 ? "{" + std::to_string(numStates - 1) + "{1'b0}}, " : "") << "1'b1};\n"
       << "        end else begin\n"
       << "            state_reg <= next_state;\n"
       << "        end\n"
       << "    end\n\n";
 
-    // Match logic
     f << "    always @(posedge clk) begin\n"
       << "        if (rst || start) begin\n"
       << "            match <= 1'b0;\n"
       << "        end else if (end_of_str) begin\n"
       << "            match <= ";
     
-    bool firstAccept = true;
+    std::vector<std::string> acceptTerms;
     for (const auto& [id, state] : nfa.states) {
         if (state.isAccept) {
-            if (!firstAccept) f << " || ";
-            f << "next_state[" << globalToLocal[id] << "]";
-            firstAccept = false;
+            acceptTerms.push_back("state_reg[" + std::to_string(globalToLocal.at(id)) + "]");
         }
     }
-    if (firstAccept) f << "1'b0";
+
+    if (acceptTerms.empty()) {
+        f << "1'b0";
+    } else if (acceptTerms.size() == 1) {
+        f << acceptTerms[0];
+    } else {
+        f << "(\n";
+        for (size_t t = 0; t < acceptTerms.size(); ++t) {
+            f << "                " << acceptTerms[t];
+            if (t < acceptTerms.size() - 1) f << " ||\n";
+        }
+        f << "\n            )";
+    }
+    
     f << ";\n"
       << "        end else begin\n"
       << "            match <= 1'b0;\n"
@@ -114,7 +141,10 @@ void Emitter::emitNFAModule(const NFA& nfa, const std::string& outputDir) {
 void Emitter::emitTopModule(const std::string& outputDir) {
     std::string filename = outputDir + "/top.v";
     std::ofstream f(filename);
-    if (!f.is_open()) return;
+    if (!f.is_open()) {
+        std::cerr << "Failed to open " << filename << " for writing." << std::endl;
+        throw std::runtime_error("Could not write top module file");
+    }
 
     int numNFAs = nfas.size();
 
@@ -127,14 +157,14 @@ void Emitter::emitTopModule(const std::string& outputDir) {
       << "    output wire [" << (numNFAs > 0 ? numNFAs - 1 : 0) << ":0] match_bus\n"
       << ");\n\n";
 
-    for (const auto& nfa : nfas) {
-        f << "    nfa_" << nfa->regexIndex << " inst_" << nfa->regexIndex << " (\n"
+    for (size_t i = 0; i < nfas.size(); ++i) {
+        f << "    nfa_" << nfas[i]->regexIndex << " inst_" << nfas[i]->regexIndex << " (\n"
           << "        .clk(clk),\n"
           << "        .rst(rst),\n"
           << "        .start(start),\n"
           << "        .end_of_str(end_of_str),\n"
           << "        .char_in(char_in),\n"
-          << "        .match(match_bus[" << nfa->regexIndex << "])\n"
+          << "        .match(match_bus[" << i << "])\n"
           << "    );\n\n";
     }
 
@@ -144,7 +174,10 @@ void Emitter::emitTopModule(const std::string& outputDir) {
 void Emitter::emitTestbench(const std::string& outputDir) {
     std::string filename = outputDir + "/tb_top.v";
     std::ofstream f(filename);
-    if (!f.is_open()) return;
+    if (!f.is_open()) {
+        std::cerr << "Failed to open " << filename << " for writing." << std::endl;
+        throw std::runtime_error("Could not write testbench file");
+    }
 
     int numNFAs = nfas.size();
 
@@ -165,24 +198,53 @@ void Emitter::emitTestbench(const std::string& outputDir) {
       << "        .match_bus(match_bus)\n"
       << "    );\n\n"
       << "    always #5 clk = ~clk;\n\n"
+      << "    task run_test(input string name, input string test_str, input [" << (numNFAs > 0 ? numNFAs - 1 : 0) << ":0] expected);\n"
+      << "        integer i;\n"
+      << "        begin\n"
+      << "            $display(\"Testing [%s]: \\\"%s\\\"\", name, test_str);\n"
+      << "            start = 1;\n"
+      << "            @(posedge clk);\n"
+      << "            start = 0;\n"
+      << "            for (i = 0; i < test_str.len(); i = i + 1) begin\n"
+      << "                char_in = test_str.getc(i);\n"
+      << "                @(posedge clk);\n"
+      << "            end\n"
+      << "            end_of_str = 1;\n"
+      << "            @(posedge clk);\n"
+      << "            end_of_str = 0;\n"
+      << "            @(posedge clk);\n" // Registered output delay
+      << "            if (match_bus === expected) begin\n"
+      << "                $display(\"  PASS: match_bus = %b\", match_bus);\n"
+      << "            end else begin\n"
+      << "                $display(\"  FAIL: match_bus = %b, expected = %b\", match_bus, expected);\n"
+      << "            end\n"
+      << "            #20;\n"
+      << "        end\n"
+      << "    endtask\n\n"
       << "    initial begin\n"
+      << "        // synthesis translate_off\n"
+      << "        `ifndef SYNTHESIS\n"
       << "        $dumpfile(\"dump.vcd\");\n"
-      << "        $dumpvars(0, tb_top);\n\n"
+      << "        $dumpvars(0, tb_top);\n"
+      << "        `endif\n"
+      << "        // synthesis translate_on\n\n"
       << "        clk = 0;\n"
       << "        rst = 1;\n"
       << "        start = 0;\n"
       << "        end_of_str = 0;\n"
       << "        char_in = 0;\n\n"
       << "        #20 rst = 0;\n"
-      << "        #20;\n\n"
-      << "        // Add test cases here\n"
-      << "        $display(\"Starting simulation...\");\n\n"
-      << "        // Example: match 'abc'\n"
-      << "        // start = 1; #10 start = 0;\n"
-      << "        // char_in = \"a\"; #10;\n"
-      << "        // char_in = \"b\"; #10;\n"
-      << "        // char_in = \"c\"; end_of_str = 1; #10 end_of_str = 0;\n"
-      << "        // #10 $display(\"Match bus: %b\", match_bus);\n\n"
+      << "        #20;\n\n";
+
+    for (size_t i = 0; i < testCases.size(); ++i) {
+        f << "        run_test(\"Test " << i << "\", \"" << testCases[i].input << "\", " << numNFAs << "'b";
+        for (int j = numNFAs - 1; j >= 0; --j) {
+            f << (testCases[i].expectedMatches[j] ? "1" : "0");
+        }
+        f << ");\n";
+    }
+
+    f << "\n        $display(\"All tests completed.\");\n"
       << "        #100;\n"
       << "        $finish;\n"
       << "    end\n\n"

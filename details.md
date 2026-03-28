@@ -107,7 +107,7 @@ This stage transforms the internal NFA structures into synthesizable Verilog HDL
 For each regular expression, the emitter generates a self-contained Verilog module (`nfa_N.v`):
 - **One-Hot Encoding:** The state register uses one-hot encoding (one flip-flop per NFA state). This is ideal for FPGA implementation as it results in high-speed, shallow combinational logic.
 - **Deterministic Next-State Logic:** Transitions are implemented as pure combinational logic gating the `state_reg` with the 8-bit `char_in`.
-- **Match Logic:** The `match` output is registered and asserted if the FSM is in an acceptance state when `end_of_str` is received.
+- **Match Logic:** The `match` output is registered. It is asserted on the cycle following the `end_of_str` pulse if an acceptance state bit was active in `state_reg` during the pulse. This correctly handles nullable regexes on empty strings.
 
 ### 2. Top-Level Wrapper
 A `top.v` module is generated to instantiate all NFA modules in parallel.

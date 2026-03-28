@@ -17,17 +17,38 @@ std::string trim(const std::string& str) {
 
 int main(int argc, char* argv[]) {
     if (argc < 2) {
-        std::cerr << "Usage: " << argv[0] << " <regex_file> [output_dir]" << std::endl;
+        std::cerr << "Usage: " << argv[0] << " <regex_file> [test_strings_file] [output_dir]" << std::endl;
         return 1;
     }
 
     std::string regexFilename = argv[1];
-    std::string outputDir = (argc > 2) ? argv[2] : "output";
+    std::string testFilename = (argc > 2 && std::string(argv[2]).find('/') == std::string::npos && std::string(argv[2]).find('.') != std::string::npos) ? argv[2] : "";
+    std::string outputDir = "output";
+
+    if (argc == 3) {
+        if (testFilename.empty()) outputDir = argv[2];
+    } else if (argc >= 4) {
+        testFilename = argv[2];
+        outputDir = argv[3];
+    }
 
     std::ifstream regexFile(regexFilename);
     if (!regexFile.is_open()) {
         std::cerr << "Failed to open " << regexFilename << std::endl;
         return 1;
+    }
+
+    std::vector<std::string> testStrings;
+    if (!testFilename.empty()) {
+        std::ifstream testFile(testFilename);
+        if (testFile.is_open()) {
+            std::string tLine;
+            while (std::getline(testFile, tLine)) {
+                std::string trimmed = trim(tLine);
+                if (trimmed.empty() || trimmed[0] == '#') continue;
+                testStrings.push_back(trimmed);
+            }
+        }
     }
 
     std::string line;
@@ -66,9 +87,24 @@ int main(int argc, char* argv[]) {
     std::cout << "Generated " << nfas.size() << " NFAs. Emitting Verilog..." << std::endl;
 
     Emitter emitter(nfas);
-    emitter.emit(outputDir);
+    
+    // Generate expected matches for the testbench
+    for (const auto& ts : testStrings) {
+        std::vector<bool> expected;
+        for (const auto& nfa : nfas) {
+            expected.push_back(nfa->simulate(ts));
+        }
+        emitter.addTestCase(ts, expected);
+    }
 
-    std::cout << "Verilog files emitted to '" << outputDir << "/'" << std::endl;
+    try {
+        emitter.emit(outputDir);
+        std::cout << "Verilog files emitted to '" << outputDir << "/'" << std::endl;
+    } catch (const std::exception& e) {
+        std::cerr << "Emission failed: " << e.what() << std::endl;
+        return 1;
+    }
+
     std::cout << "Pipeline complete." << std::endl;
 
     return 0;

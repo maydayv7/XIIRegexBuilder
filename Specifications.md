@@ -176,7 +176,7 @@ Each NFA produces one Verilog module. The module's ports are:
 - `clk` — clock input.
 - `rst` — synchronous active-high reset.
 - `start` — a one-cycle pulse that initialises the FSM to its start state, beginning a new match attempt.
-- `end_of_str` — a one-cycle pulse asserted on the same cycle as the final character of the input string.
+- `end_of_str` — a one-cycle pulse asserted one cycle after the final character of the input string.
 - `char_in` — an 8-bit input carrying the current ASCII character.
 - `match` — a registered output that is asserted for one cycle when the FSM is in an accept state at the moment `end_of_str` is asserted.
 
@@ -192,7 +192,7 @@ The next-state logic is purely combinational and free of any ε-closure computat
 
 ### 6.5 Match Output Logic
 
-The `match` output is registered. It is asserted on the cycle following the cycle on which `end_of_str` is asserted, provided that at least one accept-state bit is active in the state register at the time `end_of_str` is seen.
+The `match` output is registered. It is asserted on the cycle following the cycle on which `end_of_str` is asserted, provided that at least one accept-state bit is active in the state register at the time `end_of_str` is seen. This ensures correct matching for both non-empty and empty strings (if the regex is nullable).
 
 ### 6.6 Top-Level Wrapper Module
 
@@ -218,7 +218,7 @@ The testbench instantiates `top` and drives all its inputs. It operates as follo
 1. Assert `rst` for a fixed number of cycles to initialise all FSMs.
 2. Assert `start` for one cycle.
 3. Drive `char_in` with successive characters of the test string, one per clock cycle.
-4. On the last character cycle, also assert `end_of_str`.
+4. On the cycle following the last character, assert `end_of_str` for one cycle.
 5. Sample `match` on the following cycle and compare it against the expected bitmask from the golden reference.
 6. Print a PASS or FAIL message for each test case, including the test string and the observed versus expected match bitmasks.
 
