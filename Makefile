@@ -31,3 +31,47 @@ TEST_OBJS = $(TEST_SRCS:.cpp=.o)
 GOLDEN_OBJS = $(GOLDEN_SRCS:.cpp=.o)
 
 INPUT_DIR = inputs
+OUTPUT_DIR = output
+
+# Vivado Simulation Tools
+VIVADO_PATH = vivado
+XVLOG = xvlog
+XELAB = xelab
+XSIM  = xsim
+SIM_TOP = tb_top
+SNAPSHOT = regex_sim
+
+all: $(TARGET) $(GOLDEN)
+
+$(TARGET): $(OBJS) | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -o $(TARGET) $(OBJS)
+
+$(TESTER): $(TEST_OBJS) | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -o $(TESTER) $(TEST_OBJS)
+
+$(GOLDEN): $(GOLDEN_OBJS) | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -o $(GOLDEN) $(GOLDEN_OBJS)
+
+$(BUILD_DIR):
+	$(call MKDIR,$(BUILD_DIR))
+
+$(OUTPUT_DIR):
+	$(call MKDIR,$(OUTPUT_DIR))
+
+%.o: %.cpp
+	$(CC) $(CFLAGS) -c $< -o $@
+
+run: all | $(OUTPUT_DIR)
+	$(TARGET) $(INPUT_DIR)/regexes.txt $(INPUT_DIR)/test_strings.txt $(OUTPUT_DIR)
+
+test: $(TESTER)
+	$(TESTER) $(INPUT_DIR)/regexes.txt $(INPUT_DIR)/test_strings.txt
+
+
+golden: $(GOLDEN) | $(OUTPUT_DIR)
+	$(GOLDEN) $(INPUT_DIR)/regexes.txt $(INPUT_DIR)/test_strings.txt $(OUTPUT_DIR)/expected_matches.txt
+
+sim: run
+	@echo "1. Compiling Verilog files..."
+	$(XVLOG) $(OUTPUT_DIR)/*.v 
+	@echo "2. Elaborating design..."
