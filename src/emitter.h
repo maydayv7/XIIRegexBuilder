@@ -6,34 +6,32 @@
 #include <memory>
 #include "nfa.h"
 
+#include <filesystem>
+#include <system_error>
+
 class Emitter {
 public:
-    explicit Emitter(const std::vector<std::unique_ptr<NFA>>& nfas);
-    
+    Emitter() = delete; // Static class, no instances
+
     /**
      * @brief Emits all Verilog files (nfa_*.v, top.v, tb_top.v) to the specified directory.
+     * @param nfas The vector of NFAs to be emitted.
      * @param outputDir Directory where files will be written.
      * @param testStrings Optional test strings for the testbench.
      * @param expectedMatches Optional expected match masks for the testbench.
      */
-    void emit(const std::string& outputDir, 
-              const std::vector<std::string>& testStrings = {}, 
-              const std::vector<std::string>& expectedMatches = {}) const;
+    static void emit(const std::vector<std::unique_ptr<NFA>>& nfas,
+                     const std::string& outputDir, 
+                     const std::vector<std::string>& testStrings = {}, 
+                     const std::vector<std::string>& expectedMatches = {});
 
 private:
-    const std::vector<std::unique_ptr<NFA>>& nfas;
-
-    void emitNFAModule(const NFA& nfa, const std::string& outputDir) const;
-    void emitTopModule(const std::string& outputDir) const;
-    void emitTestbench(const std::string& outputDir, 
-                       const std::vector<std::string>& testStrings, 
-                       const std::vector<std::string>& expectedMatches) const;
-
-    // Helper to ensure output directory exists
-    static void ensureDirectory(const std::string& dir);
-    
-    // Helper to escape characters for Verilog comments/literals
-    static std::string escapeChar(unsigned char c);
+    static void emitNFAModule(const NFA& nfa, const std::filesystem::path& outputDir);
+    static void emitTopModule(const std::vector<std::unique_ptr<NFA>>& nfas, const std::filesystem::path& outputDir);
+    static void emitTestbench(const std::vector<std::unique_ptr<NFA>>& nfas,
+                              const std::filesystem::path& outputDir, 
+                              const std::vector<std::string>& testStrings, 
+                              const std::vector<std::string>& expectedMatches);
 };
 
 #endif // EMITTER_H

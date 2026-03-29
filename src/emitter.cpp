@@ -6,39 +6,51 @@
 #include <algorithm>
 #include <set>
 #include <map>
-#include <sys/stat.h>
+#include <system_error>
+#include <filesystem>
 
-#ifdef _WIN32
-#include <direct.h>
-#define mkdir(dir, mode) _mkdir(dir)
-#endif
-
-Emitter::Emitter(const std::vector<std::unique_ptr<NFA>>& nfas) : nfas(nfas) {}
-
-void Emitter::emit(const std::string& outputDir, 
+void Emitter::emit(const std::vector<std::unique_ptr<NFA>>& nfas,
+                   const std::string& outputDirStr, 
                    const std::vector<std::string>& testStrings, 
-                   const std::vector<std::string>& expectedMatches) const {
-    ensureDirectory(outputDir);
+                   const std::vector<std::string>& expectedMatches) {
+    if (nfas.empty()) {
+        std::cout << "No valid NFAs were provided; skipping Verilog emission." << std::endl;
+        return;
+    }
+
+    std::filesystem::path outputDir(outputDirStr);
+    try {
+        std::filesystem::create_directories(outputDir);
+    } catch (const std::filesystem::filesystem_error& e) {
+        throw std::system_error(e.code(), "Failed to create output directory: " + outputDir.string());
+    }
 
     for (const auto& nfa : nfas) {
         emitNFAModule(*nfa, outputDir);
     }
 
-    emitTopModule(outputDir);
-    emitTestbench(outputDir, testStrings, expectedMatches);
+    emitTopModule(nfas, outputDir);
+    emitTestbench(nfas, outputDir, testStrings, expectedMatches);
 }
 
-void Emitter::emitNFAModule(const NFA& nfa, const std::string& outputDir) const {
-    std::string filename = outputDir + "/nfa_" + std::to_string(nfa.regexIndex) + ".v";
-    std::ofstream out(filename);
-    if (!out.is_open()) {
-        throw std::runtime_error("Could not open " + filename + " for writing.");
+void Emitter::emitNFAModule(const NFA& nfa, const std::filesystem::path& outputDir) {
+    auto filePath = outputDir / ("nfa_" + std::to_string(nfa.regexIndex) + ".v");
+    std::ofstream out;
+    out.exceptions(std::ofstream::failbit | std::ofstream::badbit);
+
+    try {
+        out.open(filePath);
+    } catch (const std::ios_base::failure& e) {
+        throw std::system_error(errno, std::generic_category(), "Could not open " + filePath.string() + " for writing");
     }
 
     int numStates = static_cast<int>(nfa.states.size());
-    
+    if (numStates == 0) return; // Should not happen with valid NFAs
+
     std::map<int, int> globalToLocal;
     int localIdx = 0;
+    
+    // Ensure start state is always local state 0
     globalToLocal[nfa.startStateId] = localIdx++;
     
     // Sort other state IDs for deterministic output
@@ -64,18 +76,24 @@ void Emitter::emitNFAModule(const NFA& nfa, const std::string& outputDir) const 
         << "    reg [" << numStates - 1 << ":0] state_reg;\n"
         << "    wire [" << numStates - 1 << ":0] next_state;\n\n";
 
-    for (int j = 0; j < numStates; ++j) {
-        out << "    assign next_state[" << j << "] = ";
+    // Build an inverted transition map for efficient lookup: dst -> list of (src, char)
+    std::map<int, std::vector<std::pair<int, unsigned char>>> invertedTransitions;
+    for(const auto& [srcGlobalId, srcState] : nfa.states) {
+        for(const auto& [c, dstIds] : srcState.transitions) {
+            for(int dstGlobalId : dstIds) {
+                invertedTransitions[dstGlobalId].push_back({srcGlobalId, c});
+            }
+        }
+    }
+
+    for (const auto& [globalId, localId] : globalToLocal) {
+        out << "    assign next_state[" << localId << "] = ";
         
         std::vector<std::string> terms;
-        for (const auto& [srcGlobalId, srcState] : nfa.states) {
-            int srcLocal = globalToLocal.at(srcGlobalId);
-            for (const auto& [c, dstIds] : srcState.transitions) {
-                for (int dstGlobalId : dstIds) {
-                    if (globalToLocal.at(dstGlobalId) == j) {
-                        terms.push_back("(state_reg[" + std::to_string(srcLocal) + "] && (char_in == 8'd" + std::to_string((int)c) + "))");
-                    }
-                }
+        if(auto it = invertedTransitions.find(globalId); it != invertedTransitions.end()) {
+            for(const auto& [srcGlobalId, c] : it->second) {
+                int srcLocal = globalToLocal.at(srcGlobalId);
+                terms.push_back("(state_reg[" + std::to_string(srcLocal) + "] && (char_in == 8'd" + std::to_string(c) + "))");
             }
         }
 
@@ -86,16 +104,16 @@ void Emitter::emitNFAModule(const NFA& nfa, const std::string& outputDir) const 
         } else {
             out << "(\n";
             for (size_t t = 0; t < terms.size(); ++t) {
-                out << "        " << terms[t];
-                if (t < terms.size() - 1) out << " ||\n";
+                out << "        " << terms[t] << (t < terms.size() - 1 ? " ||\n" : "\n");
             }
-            out << "\n    );\n";
+            out << "    );\n";
         }
     }
 
     out << "\n    always @(posedge clk) begin\n"
         << "        if (rst || start) begin\n"
-        << "            state_reg <= {" << (numStates > 1 ? "{" + std::to_string(numStates - 1) + "{1'b0}}, " : "") << "1'b1};\n"
+        << "            // Reset to start state (one-hot)\n"
+        << "            state_reg <= 1 << " << globalToLocal.at(nfa.startStateId) << ";\n"
         << "        end else begin\n"
         << "            state_reg <= next_state;\n"
         << "        end\n"
@@ -119,12 +137,11 @@ void Emitter::emitNFAModule(const NFA& nfa, const std::string& outputDir) const 
     } else if (acceptTerms.size() == 1) {
         out << acceptTerms[0];
     } else {
-        out << "(\n";
+        out << "(|{";
         for (size_t t = 0; t < acceptTerms.size(); ++t) {
-            out << "                " << acceptTerms[t];
-            if (t < acceptTerms.size() - 1) out << " ||\n";
+            out << acceptTerms[t] << (t < acceptTerms.size() - 1 ? ", " : "");
         }
-        out << "\n            )";
+        out << "})";
     }
     
     out << ";\n"
@@ -135,10 +152,16 @@ void Emitter::emitNFAModule(const NFA& nfa, const std::string& outputDir) const 
         << "endmodule\n";
 }
 
-void Emitter::emitTopModule(const std::string& outputDir) const {
-    std::string filename = outputDir + "/top.v";
-    std::ofstream out(filename);
-    if (!out.is_open()) throw std::runtime_error("Could not open top.v");
+void Emitter::emitTopModule(const std::vector<std::unique_ptr<NFA>>& nfas, const std::filesystem::path& outputDir) {
+    auto filePath = outputDir / "top.v";
+    std::ofstream out;
+    out.exceptions(std::ofstream::failbit | std::ofstream::badbit);
+
+    try {
+        out.open(filePath);
+    } catch (const std::ios_base::failure& e) {
+        throw std::system_error(errno, std::generic_category(), "Could not open " + filePath.string() + " for writing");
+    }
 
     out << "module top (\n"
         << "    input  wire        clk,\n"
@@ -146,7 +169,7 @@ void Emitter::emitTopModule(const std::string& outputDir) const {
         << "    input  wire        start,\n"
         << "    input  wire        end_of_str,\n"
         << "    input  wire [7:0]  char_in,\n"
-        << "    output wire [" << (nfas.empty() ? 0 : nfas.size() - 1) << ":0] match_bus\n"
+        << "    output wire [" << (nfas.size() - 1) << ":0] match_bus\n"
         << ");\n\n";
 
     for (size_t i = 0; i < nfas.size(); ++i) {
@@ -157,14 +180,21 @@ void Emitter::emitTopModule(const std::string& outputDir) const {
     out << "endmodule\n";
 }
 
-void Emitter::emitTestbench(const std::string& outputDir, 
+void Emitter::emitTestbench(const std::vector<std::unique_ptr<NFA>>& nfas,
+                           const std::filesystem::path& outputDir, 
                            const std::vector<std::string>& testStrings, 
-                           const std::vector<std::string>& expectedMatches) const {
-    std::string filename = outputDir + "/tb_top.v";
-    std::ofstream out(filename);
-    if (!out.is_open()) throw std::runtime_error("Could not open tb_top.v");
+                           const std::vector<std::string>& expectedMatches) {
+    auto filePath = outputDir / "tb_top.v";
+    std::ofstream out;
+    out.exceptions(std::ofstream::failbit | std::ofstream::badbit);
 
-    int numNFAs = static_cast<int>(nfas.size());
+    try {
+        out.open(filePath);
+    } catch (const std::ios_base::failure& e) {
+        throw std::system_error(errno, std::generic_category(), "Could not open " + filePath.string() + " for writing");
+    }
+
+    size_t numNFAs = nfas.size();
 
     out << "`timescale 1ns / 1ps\n\n"
         << "module tb_top;\n"
@@ -188,41 +218,29 @@ void Emitter::emitTestbench(const std::string& outputDir,
         out << "        // Test case " << i << ": \"" << s << "\"\n"
             << "        start = 1; #10 start = 0;\n";
         
-        for (size_t j = 0; j < s.length(); ++j) {
-            out << "        char_in = 8'h" << std::hex << std::setw(2) << std::setfill('0') << (int)(unsigned char)s[j] << std::dec << "; #10;\n";
+        for (char c : s) {
+            out << "        char_in = 8'h" << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(static_cast<unsigned char>(c)) << std::dec << "; #10;\n";
         }
         
-        out << "        end_of_str = 1; #10 end_of_str = 0;\n"
-            << "        #10; // Registered delay\n";
-
+        out << "        end_of_str = 1; #10; // Assert for one cycle\n";
+        out << "        // Match output is valid on the cycle immediately following end_of_str assertion\n";
+        
         if (i < expectedMatches.size()) {
-            out << "        if (match_bus === " << numNFAs << "'b" << expectedMatches[i] << ") "
-                << "$display(\"PASS: Test case " << i << " ('" << s << "') matches expected mask " << expectedMatches[i] << "\");\n"
-                << "        else "
-                << "$display(\"FAIL: Test case " << i << " ('" << s << "') expected " << expectedMatches[i] << ", got %b\", match_bus);\n\n";
+            if (expectedMatches[i].length() != numNFAs) {
+                std::string error_msg = "Testbench generation error: expected_matches[" + std::to_string(i) + "] has length " + std::to_string(expectedMatches[i].length()) + " but " + std::to_string(numNFAs) + " NFAs exist.";
+                throw std::runtime_error(error_msg);
+            }
+            out << "        if (match_bus === " << numNFAs << "'b" << expectedMatches[i] << ") begin\n"
+                << "            $display(\"PASS: Test case " << i << " ('" << s << "') matches expected mask " << expectedMatches[i] << "\");\n"
+                << "        end else begin\n"
+                << "            $display(\"FAIL: Test case " << i << " ('" << s << "') expected " << expectedMatches[i] << ", got %b\", match_bus);\n"
+                << "        end\n";
         } else {
-             out << "        $display(\"Result for '" << s << "': %b\", match_bus);\n\n";
+             out << "        $display(\"INFO: Result for '" << s << "': %b\", match_bus);\n";
         }
+        out << "        end_of_str = 0; #10;\n\n"; // De-assert and wait before next test
     }
 
     out << "        $display(\"All tests completed.\");\n"
         << "        #100; $finish;\n    end\nendmodule\n";
-}
-
-void Emitter::ensureDirectory(const std::string& dir) {
-    struct stat info;
-    if (stat(dir.c_str(), &info) != 0) {
-#ifdef _WIN32
-        _mkdir(dir.c_str());
-#else
-        mkdir(dir.c_str(), 0777);
-#endif
-    }
-}
-
-std::string Emitter::escapeChar(unsigned char c) {
-    if (c >= 32 && c <= 126 && c != '"' && c != '\\') return std::string(1, (char)c);
-    std::stringstream ss;
-    ss << "\\x" << std::hex << std::setw(2) << std::setfill('0') << (int)c;
-    return ss.str();
 }

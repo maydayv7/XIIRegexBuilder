@@ -50,7 +50,6 @@ int main(int argc, char* argv[]) {
         std::string trimmedLine = trim(line);
         if (trimmedLine.empty() || trimmedLine[0] == '#') continue;
 
-        rawRegexes.push_back(trimmedLine);
         std::cout << "Processing Regex [" << regexIdx << "]: " << trimmedLine << std::endl;
 
         Lexer lexer(trimmedLine, lineNum);
@@ -58,9 +57,11 @@ int main(int argc, char* argv[]) {
             std::vector<Token> tokens = lexer.tokenize();
             Parser parser(tokens);
             auto ast = parser.parse();
-            auto nfa = NFABuilder::build(ast.get(), regexIdx++);
+            auto nfa = NFABuilder::build(ast.get(), regexIdx);
             if (nfa) {
                 nfas.push_back(std::move(nfa));
+                rawRegexes.push_back(trimmedLine);
+                regexIdx++; // Increment only on success
             }
         } catch (const std::exception& e) {
             std::cerr << "Error parsing regex: " << e.what() << std::endl;
@@ -108,10 +109,13 @@ int main(int argc, char* argv[]) {
 
     std::cout << "Generated " << nfas.size() << " NFAs. Emitting Verilog..." << std::endl;
 
-    Emitter emitter(nfas);
-    emitter.emit(outputDir, testStrings, expectedMatches);
-
-    std::cout << "Pipeline complete. Verilog files emitted to '" << outputDir << "/'" << std::endl;
+    try {
+        Emitter::emit(nfas, outputDir, testStrings, expectedMatches);
+        std::cout << "Pipeline complete. Verilog files emitted to '" << outputDir << "/'" << std::endl;
+    } catch (const std::exception& e) {
+        std::cerr << "Error during Verilog emission: " << e.what() << std::endl;
+        return 1;
+    }
 
     return 0;
 }

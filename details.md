@@ -105,10 +105,12 @@ This stage transforms the internal NFA structures into synthesizable Verilog HDL
 
 ### 1. Per-NFA Modules
 For each regular expression, the emitter generates a self-contained Verilog module (`nfa_N.v`):
+- **File I/O:** All file and directory operations use the C++17 `<filesystem>` library for cross-platform compatibility and improved error handling. File streams are configured to throw exceptions on failure, providing detailed system-level error messages (e.g., "Permission denied").
+- **Robustness:** The emitter validates its inputs before generating code. It will skip emission if no valid NFAs are provided and will throw an error if the golden reference data does not match the number of NFAs, preventing the generation of invalid Verilog.
 - **One-Hot Encoding:** The state register uses one-hot encoding (one flip-flop per NFA state). This is ideal for FPGA implementation as it results in high-speed, shallow combinational logic.
-- **Optimized Next-State Logic:** Transitions are implemented as pure combinational logic. The emitter groups transitions for the same character to minimize logic depth. **Dot transitions** are efficiently grouped into a single OR-reduction of source states.
+- **Optimized Next-State Logic:** Transitions are implemented as pure combinational logic. To improve generation speed, the logic is built by iterating over destination states rather than source states.
 - **Deterministic Output:** Global state IDs are sorted during emission to ensure consistent and deterministic Verilog code generation.
-- **Match Logic:** The `match` output is registered and uses the `next_state` vector to ensure the last character of the input string is correctly accounted for, satisfying full-match semantics.
+- **Match Logic:** The `match` output is registered. The logic uses a Verilog OR-reduction (`|{...}`) for a concise and efficient way to check if any of the final accept states are active.
 
 ### 2. Top-Level Wrapper
 A `top.v` module is generated to instantiate all NFA modules in parallel.
@@ -119,5 +121,5 @@ A `top.v` module is generated to instantiate all NFA modules in parallel.
 A fully functional testbench (`tb_top.v`) is generated:
 - It automatically loads test cases from `test_strings.txt`.
 - It integrates **Golden Reference** matches generated via `std::regex`.
-- For each test string, it drives the `start`, `char_in`, and `end_of_str` signals, then validates the `match_bus` against the expected bitmask.
+- For each test string, it drives the `start`, `char_in`, and `end_of_str` signals with correct, deterministic timing. The testbench now samples the registered `match` output on the exact clock cycle it becomes valid (the cycle immediately following the assertion of `end_of_str`), explicitly avoiding race conditions and double-sampling bugs.
 - It reports `PASS` or `FAIL` for each test case directly in the simulation console and generates a `dump.vcd` for waveform analysis.
