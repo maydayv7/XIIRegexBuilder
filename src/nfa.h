@@ -31,3 +31,14 @@ public:
 class NFABuilder {
 public:
     // Global state counter to ensure unique IDs across all NFAs
+    static int globalStateCounter;
+
+    static std::unique_ptr<NFA> build(ASTNode* root, int regexIdx);
+
+private:
+    static void linearize(ASTNode* node, int& posCounter, std::map<int, unsigned char>& posToChar, std::set<int>& dotPositions);
+    static void computeNullableFirstLast(ASTNode* node);
+    static void computeFollowpos(ASTNode* node, std::map<int, std::set<int>>& followpos);
+};
+
+#endif // NFA_H

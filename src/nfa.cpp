@@ -204,3 +204,64 @@ void NFABuilder::computeNullableFirstLast(ASTNode* node) {
             n->lastpos = n->inner->lastpos;
             break;
         }
+        case ASTNodeType::PLUS: {
+            auto n = static_cast<PlusNode*>(node);
+            computeNullableFirstLast(n->inner.get());
+            n->nullable = n->inner->nullable;
+            n->firstpos = n->inner->firstpos;
+            n->lastpos = n->inner->lastpos;
+            break;
+        }
+        case ASTNodeType::OPTIONAL: {
+            auto n = static_cast<OptionalNode*>(node);
+            computeNullableFirstLast(n->inner.get());
+            n->nullable = true;
+            n->firstpos = n->inner->firstpos;
+            n->lastpos = n->inner->lastpos;
+            break;
+        }
+    }
+}
+
+void NFABuilder::computeFollowpos(ASTNode* node, std::map<int, std::set<int>>& followpos) {
+    if (!node) return;
+    switch (node->type) {
+        case ASTNodeType::CONCATENATION: {
+            auto n = static_cast<ConcatenationNode*>(node);
+            computeFollowpos(n->left.get(), followpos);
+            computeFollowpos(n->right.get(), followpos);
+            for (int p : n->left->lastpos) {
+                followpos[p].insert(n->right->firstpos.begin(), n->right->firstpos.end());
+            }
+            break;
+        }
+        case ASTNodeType::STAR: {
+            auto n = static_cast<StarNode*>(node);
+            computeFollowpos(n->inner.get(), followpos);
+            for (int p : n->inner->lastpos) {
+                followpos[p].insert(n->inner->firstpos.begin(), n->inner->firstpos.end());
+            }
+            break;
+        }
+        case ASTNodeType::PLUS: {
+            auto n = static_cast<PlusNode*>(node);
+            computeFollowpos(n->inner.get(), followpos);
+            for (int p : n->inner->lastpos) {
+                followpos[p].insert(n->inner->firstpos.begin(), n->inner->firstpos.end());
+            }
+            break;
+        }
+        case ASTNodeType::UNION: {
+            auto n = static_cast<UnionNode*>(node);
+            computeFollowpos(n->left.get(), followpos);
+            computeFollowpos(n->right.get(), followpos);
+            break;
+        }
+        case ASTNodeType::OPTIONAL: {
+            auto n = static_cast<OptionalNode*>(node);
+            computeFollowpos(n->inner.get(), followpos);
+            break;
+        }
+        default: break;
+    }
+}
