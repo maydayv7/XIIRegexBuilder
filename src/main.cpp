@@ -91,3 +91,31 @@ int main(int argc, char* argv[]) {
                 testStrings.push_back(s);
                 
                 // Generate expected matches using std::regex
+                std::string mask = "";
+                for (const auto& re_str : rawRegexes) {
+                    bool match = false;
+                    try {
+                        std::regex re(re_str);
+                        match = std::regex_match(s, re);
+                    } catch (...) {}
+                    mask += (match ? "1" : "0");
+                }
+                std::reverse(mask.begin(), mask.end());
+                expectedMatches.push_back(mask);
+            }
+            std::cout << "Loaded " << testStrings.size() << " test strings and generated golden matches." << std::endl;
+        }
+    }
+
+    std::cout << "Generated " << nfas.size() << " NFAs. Emitting Verilog..." << std::endl;
+
+    try {
+        Emitter::emit(nfas, outputDir, testStrings, expectedMatches);
+        std::cout << "Pipeline complete. Verilog files emitted to '" << outputDir << "/'" << std::endl;
+    } catch (const std::exception& e) {
+        std::cerr << "Error during Verilog emission: " << e.what() << std::endl;
+        return 1;
+    }
+
+    return 0;
+}
