@@ -40,3 +40,61 @@ std::unique_ptr<ASTNode> Parser::parseExpression() {
     }
 
     return left;
+}
+
+// Term -> Factor+
+std::unique_ptr<ASTNode> Parser::parseTerm() {
+    auto node = parseFactor();
+
+    while (!isAtEnd() && 
+           peek().type != TokenType::PIPE && 
+           peek().type != TokenType::RPAREN && 
+           peek().type != TokenType::END_OF_INPUT) {
+        auto next = parseFactor();
+        node = std::make_unique<ConcatenationNode>(std::move(node), std::move(next));
+    }
+
+    return node;
+}
+
+// Factor -> Atom ( '*' | '+' | '?' )?
+std::unique_ptr<ASTNode> Parser::parseFactor() {
+    auto node = parseAtom();
+
+    if (match(TokenType::STAR)) {
+        node = std::make_unique<StarNode>(std::move(node));
+    } else if (match(TokenType::PLUS)) {
+        node = std::make_unique<PlusNode>(std::move(node));
+    } else if (match(TokenType::QUESTION)) {
+        node = std::make_unique<OptionalNode>(std::move(node));
+    }
+
+    return node;
+}
+
+// Atom -> LITERAL | DOT | '(' Expression ')'
+std::unique_ptr<ASTNode> Parser::parseAtom() {
+    if (match(TokenType::LITERAL)) {
+        return std::make_unique<LiteralNode>(tokens[pos - 1].value);
+    }
+
+    if (match(TokenType::DOT)) {
+        return std::make_unique<DotNode>();
+    }
+
+    if (match(TokenType::LPAREN)) {
+        auto node = parseExpression();
+        if (!match(TokenType::RPAREN)) {
+            error("Unmatched parenthesis: expected ')'");
+        }
+        return node;
+    }
+
+    if (peek().type == TokenType::STAR || peek().type == TokenType::PLUS || peek().type == TokenType::QUESTION) {
+        error("Quantifier '" + tokenTypeToString(peek().type) + "' applied to nothing");
+    }
+
+    error("Unexpected token: " + tokenTypeToString(peek().type));
+    return nullptr; // Should not reach here
+}
+
