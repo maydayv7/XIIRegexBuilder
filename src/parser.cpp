@@ -98,3 +98,33 @@ std::unique_ptr<ASTNode> Parser::parseAtom() {
     return nullptr; // Should not reach here
 }
 
+const Token& Parser::peek() const {
+    return tokens[pos];
+}
+
+const Token& Parser::advance() {
+    if (!isAtEnd()) pos++;
+    return tokens[pos - 1];
+}
+
+bool Parser::match(TokenType type) {
+    if (check(type)) {
+        advance();
+        return true;
+    }
+    return false;
+}
+
+bool Parser::check(TokenType type) const {
+    if (isAtEnd()) return false;
+    return peek().type == type;
+}
+
+bool Parser::isAtEnd() const {
+    return pos >= tokens.size() || tokens[pos].type == TokenType::END_OF_INPUT;
+}
+
+void Parser::error(const std::string& message) const {
+    const Token& t = peek();
+    throw std::runtime_error(message + " at line " + std::to_string(t.line) + ", column " + std::to_string(t.column));
+}

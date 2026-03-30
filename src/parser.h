@@ -80,3 +80,28 @@ public:
     explicit OptionalNode(std::unique_ptr<ASTNode> i)
         : ASTNode(ASTNodeType::OPTIONAL), inner(std::move(i)) {}
 };
+
+class Parser {
+public:
+    explicit Parser(const std::vector<Token>& tokens);
+    std::unique_ptr<ASTNode> parse();
+
+private:
+    const std::vector<Token>& tokens;
+    size_t pos;
+
+    std::unique_ptr<ASTNode> parseExpression();   // Union
+    std::unique_ptr<ASTNode> parseTerm();         // Concatenation
+    std::unique_ptr<ASTNode> parseFactor();       // Quantifiers
+    std::unique_ptr<ASTNode> parseAtom();         // Literals, Dot, Parens
+
+    const Token& peek() const;
+    const Token& advance();
+    bool match(TokenType type);
+    bool check(TokenType type) const;
+    bool isAtEnd() const;
+
+    void error(const std::string& message) const;
+};
+
+#endif // PARSER_H
