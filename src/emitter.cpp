@@ -794,3 +794,121 @@ void Emitter::emitTopFPGA(const std::vector<std::unique_ptr<NFA>> &nfas, const s
         << "    localparam S_TX_ARM    = 4'd8;\n"
         << "    localparam S_TX_WAIT   = 4'd9;\n"
         << "    localparam S_RESET_NFA = 4'd10;\n"
+        << "    localparam S_QUERY_TX  = 4'd11;\n\n"
+        << "    reg [3:0] state = S_RESET_NFA;\n\n"
+        << "    reg [" << busHigh << ":0] snap_match = " << numNFAs << "'b0;\n"
+        << "    reg [31:0]          snap_bytes = 32'd0;\n"
+        << "    integer k;\n\n"
+        << "    always @(posedge clk) begin\n"
+        << "        tx_send    <= 1'b0;\n"
+        << "        fifo_rd_en <= 1'b0;\n"
+        << "        nfa_en     <= 1'b0;\n"
+        << "        nfa_start  <= 1'b0;\n\n"
+        << "        if (rst_btn) begin\n"
+        << "            state      <= S_RESET_NFA;\n"
+        << "            match_leds <= " << numNFAs << "'b0;\n"
+        << "            byte_count <= 32'd0;\n"
+        << "            for (k = 0; k < 16; k = k + 1)\n"
+        << "                match_count[k] <= 16'd0;\n"
+        << "        end else begin\n"
+        << "            case (state)\n\n"
+        << "                S_IDLE: begin\n"
+        << "                    nfa_end_of_str <= 1'b0;\n"
+        << "                    if (!fifo_empty) state <= S_FETCH;\n"
+        << "                end\n\n"
+        << "                S_FETCH: begin\n"
+        << "                    fifo_rd_en <= 1'b1;\n"
+        << "                    state      <= S_DECODE;\n"
+        << "                end\n\n"
+        << "                S_DECODE: begin\n"
+        << "                    if (fifo_rd_data == 8'h0A || fifo_rd_data == 8'h0D) begin\n"
+        << "                        nfa_end_of_str <= 1'b1;\n"
+        << "                        state          <= S_EOL_END;\n"
+        << "                    end else if (fifo_rd_data == 8'h3F) begin  // '?'\n"
+        << "                        state <= S_QUERY_TX;\n"
+        << "                    end else begin\n"
+        << "                        nfa_char_in <= fifo_rd_data;\n"
+        << "                        state       <= S_CHAR_LOAD;\n"
+        << "                    end\n"
+        << "                end\n\n"
+        << "                S_CHAR_LOAD: state <= S_CHAR_STEP;\n\n"
+        << "                S_CHAR_STEP: begin\n"
+        << "                    nfa_en     <= 1'b1;\n"
+        << "                    byte_count <= byte_count + 1;\n"
+        << "                    state      <= S_IDLE;\n"
+        << "                end\n\n"
+        << "                S_EOL_END: begin\n"
+        << "                    nfa_en <= 1'b1;\n"
+        << "                    state  <= S_EOL_MATCH;\n"
+        << "                end\n\n"
+        << "                S_EOL_MATCH: begin\n"
+        << "                    nfa_en         <= 1'b1;\n"
+        << "                    nfa_end_of_str <= 1'b0;\n"
+        << "                    state          <= S_EOL_LATCH;\n"
+        << "                end\n\n"
+        << "                S_EOL_LATCH: begin\n"
+        << "                    snap_match <= match_bus;\n"
+        << "                    snap_bytes <= byte_count;\n"
+        << "                    match_leds <= match_bus;\n"
+        << "                    for (k = 0; k < " << numNFAs << "; k = k + 1)\n"
+        << "                        if (match_bus[k]) match_count[k] <= match_count[k] + 16'd1;\n"
+        << "                    state <= S_TX_ARM;\n"
+        << "                end\n\n"
+        << "                S_TX_ARM: begin\n"
+        << "                    build_response(snap_match, snap_bytes);\n"
+        << "                    tx_send <= 1'b1;\n"
+        << "                    state   <= S_TX_WAIT;\n"
+        << "                end\n\n"
+        << "                S_TX_WAIT:\n"
+        << "                    if (tx_state == TX_IDLE && !tx_send) state <= S_RESET_NFA;\n\n"
+        << "                S_RESET_NFA: begin\n"
+        << "                    nfa_start <= 1'b1;\n"
+        << "                    nfa_en    <= 1'b1;\n"
+        << "                    state     <= S_IDLE;\n"
+        << "                end\n\n"
+        << "                S_QUERY_TX: begin\n"
+        << "                    build_response(" << numNFAs << "'b0, byte_count);\n"
+        << "                    tx_send <= 1'b1;\n"
+        << "                    state   <= S_TX_WAIT;\n"
+        << "                end\n\n"
+        << "                default: state <= S_IDLE;\n"
+        << "            endcase\n"
+        << "        end\n"
+        << "    end\n\n"
+        << "endmodule\n";
+}
+
+// =============================================================================
+// emitConstraints — constraints.xdc
+// =============================================================================
+void Emitter::emitConstraints(const std::vector<std::unique_ptr<NFA>> &nfas, const std::filesystem::path &outputDir)
+{
+    auto filePath = outputDir / "constraints.xdc";
+    std::ofstream out(filePath);
+    out.exceptions(std::ofstream::failbit | std::ofstream::badbit);
+
+    out << "## Clock signal (Nexys A7 100MHz)\n"
+        << "set_property PACKAGE_PIN E3 [get_ports clk]\n"
+        << "set_property IOSTANDARD LVCMOS33 [get_ports clk]\n"
+        << "create_clock -add -name sys_clk_pin -period 10.00 -waveform {0 5} [get_ports clk]\n\n";
+
+    out << "## USB-RS232 Interface (Nexys A7)\n"
+        << "set_property PACKAGE_PIN C4 [get_ports uart_rx_pin]\n"
+        << "set_property IOSTANDARD LVCMOS33 [get_ports uart_rx_pin]\n\n"
+        << "set_property PACKAGE_PIN D4 [get_ports uart_tx_pin]\n"
+        << "set_property IOSTANDARD LVCMOS33 [get_ports uart_tx_pin]\n\n";
+
+    out << "## Buttons (Nexys A7 Center Button - BTNC)\n"
+        << "set_property PACKAGE_PIN N17 [get_ports rst_btn]\n"
+        << "set_property IOSTANDARD LVCMOS33 [get_ports rst_btn]\n\n";
+
+    out << "## LEDs (Nexys A7 LED0 to LED15)\n";
+    std::vector<std::string> led_pins = {
+        "H17", "K15", "J13", "N14", "R18", "V17", "U17", "U16",
+        "V16", "T15", "U14", "T16", "V15", "V14", "V12", "V11"};
+    for (size_t i = 0; i < nfas.size() && i < led_pins.size(); ++i)
+    {
+        out << "set_property PACKAGE_PIN " << led_pins[i] << " [get_ports {match_leds[" << i << "]}]\n"
+            << "set_property IOSTANDARD LVCMOS33 [get_ports {match_leds[" << i << "]}]\n";
+    }
+}
