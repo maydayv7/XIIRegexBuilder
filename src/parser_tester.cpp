@@ -30,3 +30,45 @@ int main(int argc, char* argv[]) {
     // Optional: Test strings for validation
     std::string testFilename = (argc > 2) ? argv[2] : "";
     std::vector<std::string> testStrings;
+    if (!testFilename.empty()) {
+        std::ifstream testFile(testFilename);
+        if (testFile.is_open()) {
+            std::string testLine;
+            while (std::getline(testFile, testLine)) {
+                std::string trimmed = trim(testLine);
+                if (trimmed.empty() || trimmed[0] == '#') continue;
+                testStrings.push_back(trimmed);
+            }
+        }
+    }
+
+    std::string line;
+    int lineNum = 0;
+    int regexIdx = 0;
+    std::vector<std::unique_ptr<NFA>> nfas;
+    std::vector<std::string> originalRegexes;
+
+    // Core Pipeline: Regex -> Tokens -> AST -> NFA
+    while (std::getline(regexFile, line)) {
+        lineNum++;
+        std::string trimmedLine = trim(line);
+        if (trimmedLine.empty() || trimmedLine[0] == '#') continue;
+
+        originalRegexes.push_back(trimmedLine);
+        Lexer lexer(trimmedLine, lineNum);
+        try {
+            std::vector<Token> tokens = lexer.tokenize();
+            Parser parser(tokens);
+            auto ast = parser.parse();
+            
+            // Glushkov NFA construction
+            auto nfa = NFABuilder::build(ast.get(), regexIdx++);
+            if (nfa) {
+                nfas.push_back(std::move(nfa));
+            }
+        } catch (const std::exception& e) {
+            std::cerr << "Error processing regex '" << trimmedLine << "': " << e.what() << std::endl;
+        }
+    }
+
+    std::cout << "Successfully built " << nfas.size() << " NFAs." << std::endl;
