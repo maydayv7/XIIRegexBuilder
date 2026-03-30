@@ -75,3 +75,26 @@ sim: run
 	@echo "1. Compiling Verilog files..."
 	$(XVLOG) $(OUTPUT_DIR)/*.v 
 	@echo "2. Elaborating design..."
+	$(XELAB) -top $(SIM_TOP) -snapshot $(SNAPSHOT) -debug typical
+	@echo "3. Running simulation..."
+	$(XSIM) $(SNAPSHOT) -R
+
+# FPGA Targets
+synth: run
+	@echo "Launching Vivado Synthesis Flow..."
+	$(VIVADO_PATH) -mode batch -source $(call FIX_PATH,scripts/synth.tcl)
+
+program:
+	@echo "Launching Vivado Programming Flow..."
+	$(VIVADO_PATH) -mode batch -source $(call FIX_PATH,scripts/program.tcl)
+
+
+clean:
+	-$(RM) $(call FIX_PATH,src/*.o)
+	-$(RMDIR) $(call FIX_PATH,$(BUILD_DIR))
+	-$(RMDIR) $(call FIX_PATH,$(OUTPUT_DIR))
+	-$(RM) *.bit *.log *.jou *.pb *.wdb *.str usage_statistics_webtalk.*
+	-$(RM) clockInfo.txt dfx_runtime.txt
+	-$(RMDIR) xsim.dir .Xil
+
+.PHONY: all run test golden clean
