@@ -72,3 +72,26 @@ int main(int argc, char* argv[]) {
     }
 
     std::cout << "Successfully built " << nfas.size() << " NFAs." << std::endl;
+
+    // Optional Validation: NFA Simulation
+    if (!testStrings.empty()) {
+        std::cout << "\n--- NFA Simulation Results ---" << std::endl;
+        for (const auto& testStr : testStrings) {
+            std::cout << "String: \"" << testStr << "\"" << std::endl;
+            for (size_t i = 0; i < nfas.size(); ++i) {
+                bool matches = nfas[i]->simulate(testStr);
+                std::cout << "  Regex [" << i << "] (" << originalRegexes[i] << "): " 
+                          << (matches ? "MATCH" : "NO MATCH") << std::endl;
+            }
+            std::cout << std::endl;
+        }
+    }
+
+    // Future: Stage 3 — Verilog Emitter
+    // if (!nfas.empty()) {
+    //     Emitter emitter(nfas);
+    //     emitter.emit("output/");
+    // }
+
+    return 0;
+}
