@@ -398,3 +398,517 @@ module uart_rx #(
             end
             STOP_BIT: begin
                 if (clk_count < CLKS_PER_BIT-1) begin
+                    clk_count <= clk_count + 1;
+                end else begin
+                    if (rx == 1'b1) rx_ready <= 1'b1;
+                    state <= IDLE;
+                end
+            end
+        endcase
+    end
+endmodule
+)";
+}
+
+// =============================================================================
+// emitUARTTX - uart_tx.v
+// =============================================================================
+void Emitter::emitUARTTX(const std::filesystem::path &outputDir)
+{
+    auto filePath = outputDir / "uart_tx.v";
+    std::ofstream out(filePath);
+    out.exceptions(std::ofstream::failbit | std::ofstream::badbit);
+
+    out << "`timescale 1ns / 1ps\n\n";
+    out << R"(
+module uart_tx #(
+    parameter CLKS_PER_BIT = 868   // 100 MHz / 115200 baud
+)(
+    input  wire       clk,
+    input  wire       rst,
+    input  wire [7:0] tx_data,
+    input  wire       tx_start,
+    output reg        tx_busy,
+    output reg        tx
+);
+    localparam S_IDLE      = 3'd0;
+    localparam S_START_BIT = 3'd1;
+    localparam S_DATA_BITS = 3'd2;
+    localparam S_STOP_BIT  = 3'd3;
+
+    reg [2:0]  state    = S_IDLE;
+    reg [9:0]  clk_cnt  = 10'd0;
+    reg [2:0]  bit_idx  = 3'd0;
+    reg [7:0]  tx_shift = 8'd0;
+
+    always @(posedge clk) begin
+        if (rst) begin
+            state    <= S_IDLE;
+            tx       <= 1'b1;
+            tx_busy  <= 1'b0;
+            clk_cnt  <= 10'd0;
+            bit_idx  <= 3'd0;
+            tx_shift <= 8'd0;
+        end else begin
+            case (state)
+                S_IDLE: begin
+                    tx      <= 1'b1;
+                    tx_busy <= 1'b0;
+                    clk_cnt <= 10'd0;
+                    bit_idx <= 3'd0;
+                    if (tx_start) begin
+                        tx_shift <= tx_data;
+                        tx_busy  <= 1'b1;
+                        state    <= S_START_BIT;
+                    end
+                end
+                S_START_BIT: begin
+                    tx <= 1'b0;
+                    if (clk_cnt < CLKS_PER_BIT - 1)
+                        clk_cnt <= clk_cnt + 1;
+                    else begin
+                        clk_cnt <= 10'd0;
+                        state   <= S_DATA_BITS;
+                    end
+                end
+                S_DATA_BITS: begin
+                    tx <= tx_shift[0];
+                    if (clk_cnt < CLKS_PER_BIT - 1)
+                        clk_cnt <= clk_cnt + 1;
+                    else begin
+                        clk_cnt  <= 10'd0;
+                        tx_shift <= tx_shift >> 1;
+                        if (bit_idx < 7)
+                            bit_idx <= bit_idx + 1;
+                        else begin
+                            bit_idx <= 3'd0;
+                            state   <= S_STOP_BIT;
+                        end
+                    end
+                end
+                S_STOP_BIT: begin
+                    tx <= 1'b1;
+                    if (clk_cnt < CLKS_PER_BIT - 1)
+                        clk_cnt <= clk_cnt + 1;
+                    else begin
+                        clk_cnt <= 10'd0;
+                        state   <= S_IDLE;
+                    end
+                end
+                default: state <= S_IDLE;
+            endcase
+        end
+    end
+endmodule
+)";
+}
+
+// =============================================================================
+// emitFIFO - uart_rx_fifo.v
+// =============================================================================
+void Emitter::emitFIFO(const std::filesystem::path &outputDir)
+{
+    auto filePath = outputDir / "uart_rx_fifo.v";
+    std::ofstream out(filePath);
+    out.exceptions(std::ofstream::failbit | std::ofstream::badbit);
+
+    out << "`timescale 1ns / 1ps\n\n";
+    out << R"(
+module uart_rx_fifo #(
+    parameter DEPTH_LOG2 = 4        // depth = 2^DEPTH_LOG2 = 16
+)(
+    input  wire       clk,
+    input  wire       rst,
+    input  wire [7:0] wr_data,
+    input  wire       wr_en,
+    output wire       full,
+    output wire [7:0] rd_data,
+    input  wire       rd_en,
+    output wire       empty
+);
+    localparam DEPTH = 1 << DEPTH_LOG2;
+
+    reg [7:0] mem [0:DEPTH-1];
+    reg [DEPTH_LOG2-1:0] wr_ptr = {DEPTH_LOG2{1'b0}};
+    reg [DEPTH_LOG2-1:0] rd_ptr = {DEPTH_LOG2{1'b0}};
+    reg [DEPTH_LOG2  :0] count  = {(DEPTH_LOG2+1){1'b0}};
+
+    assign full    = (count == DEPTH[DEPTH_LOG2:0]);
+    assign empty   = (count == {(DEPTH_LOG2+1){1'b0}});
+    assign rd_data = mem[rd_ptr];
+
+    always @(posedge clk) begin
+        if (rst) begin
+            wr_ptr <= {DEPTH_LOG2{1'b0}};
+            rd_ptr <= {DEPTH_LOG2{1'b0}};
+            count  <= {(DEPTH_LOG2+1){1'b0}};
+        end else begin
+            if (wr_en && !full && rd_en && !empty) begin
+                mem[wr_ptr] <= wr_data;
+                wr_ptr      <= wr_ptr + 1;
+                rd_ptr      <= rd_ptr + 1;
+            end else if (wr_en && !full) begin
+                mem[wr_ptr] <= wr_data;
+                wr_ptr      <= wr_ptr + 1;
+                count       <= count + 1;
+            end else if (rd_en && !empty) begin
+                rd_ptr <= rd_ptr + 1;
+                count  <= count - 1;
+            end
+        end
+    end
+endmodule
+)";
+}
+
+// =============================================================================
+// emitTopFPGA - top_fpga.v
+// =============================================================================
+void Emitter::emitTopFPGA(const std::vector<std::unique_ptr<NFA>> &nfas, const std::filesystem::path &outputDir)
+{
+    auto filePath = outputDir / "top_fpga.v";
+    std::ofstream out(filePath);
+    out.exceptions(std::ofstream::failbit | std::ofstream::badbit);
+
+    const size_t numNFAs = nfas.size();
+    const std::string busHigh = std::to_string(numNFAs > 0 ? numNFAs - 1 : 0);
+
+    // File Header
+    out << "`timescale 1ns / 1ps\n\n"
+        << "// =============================================================================\n"
+        << "// top_fpga.v — FPGA Top-Level\n"
+        << "// Regex count: " << numNFAs << "\n"
+        << "//\n"
+        << "// Architecture:\n"
+        << "//   uart_rx → uart_rx_fifo → Control FSM → top (NFA engine)\n"
+        << "//                                         → uart_tx → host PC\n"
+        << "//\n"
+        << "// UART response packet (one line per newline received from host):\n"
+        << "//   \"MATCH=<" << numNFAs << "-bit binary> BYTES=<8 hex> HITS=<4 hex per regex,comma-sep>\\r\\n\"\n"
+        << "//\n"
+        << "// Send '?' (0x3F) to query counters without feeding the NFA.\n"
+        << "// =============================================================================\n\n";
+
+    // Module Declaration
+    out << "module top_fpga #(\n"
+        << "    parameter NUM_REGEX    = " << numNFAs << ",\n"
+        << "    parameter CLKS_PER_BIT = 868   // 100 MHz / 115200 baud\n"
+        << ")(\n"
+        << "    input  wire clk,\n"
+        << "    input  wire rst_btn,\n"
+        << "    input  wire uart_rx_pin,\n"
+        << "    output wire uart_tx_pin,\n"
+        << "    output reg  [" << busHigh << ":0] match_leds\n"
+        << ");\n\n";
+
+    // uart_rx
+    out << "    // UART RX\n"
+        << "    wire [7:0] rx_data;\n"
+        << "    wire       rx_ready;\n\n"
+        << "    uart_rx #(.CLKS_PER_BIT(CLKS_PER_BIT)) uart_rx_inst (\n"
+        << "        .clk     (clk),\n"
+        << "        .rx      (uart_rx_pin),\n"
+        << "        .rx_data (rx_data),\n"
+        << "        .rx_ready(rx_ready)\n"
+        << "    );\n\n";
+
+    // FIFO
+    out << "    // Input FIFO\n"
+        << "    wire [7:0] fifo_rd_data;\n"
+        << "    wire       fifo_empty;\n"
+        << "    wire       fifo_full;\n"
+        << "    reg        fifo_rd_en = 1'b0;\n\n"
+        << "    uart_rx_fifo #(.DEPTH_LOG2(4)) rx_fifo (\n"
+        << "        .clk    (clk),\n"
+        << "        .rst    (rst_btn),\n"
+        << "        .wr_data(rx_data),\n"
+        << "        .wr_en  (rx_ready && !fifo_full),\n"
+        << "        .full   (fifo_full),\n"
+        << "        .rd_data(fifo_rd_data),\n"
+        << "        .rd_en  (fifo_rd_en),\n"
+        << "        .empty  (fifo_empty)\n"
+        << "    );\n\n";
+
+    // NFA engine
+    out << "    // NFA Engine\n"
+        << "    reg                  nfa_start      = 1'b1;\n"
+        << "    reg                  nfa_end_of_str = 1'b0;\n"
+        << "    reg  [7:0]           nfa_char_in    = 8'h00;\n"
+        << "    reg                  nfa_en         = 1'b0;\n"
+        << "    wire [" << busHigh << ":0] match_bus;\n\n"
+        << "    top regex_engine (\n"
+        << "        .clk        (clk),\n"
+        << "        .en         (nfa_en),\n"
+        << "        .rst        (rst_btn),\n"
+        << "        .start      (nfa_start),\n"
+        << "        .end_of_str (nfa_end_of_str),\n"
+        << "        .char_in    (nfa_char_in),\n"
+        << "        .match_bus  (match_bus)\n"
+        << "    );\n\n";
+
+    // Hardware Counters
+    out << "    // Hardware Counters\n"
+        << "    reg [31:0] byte_count = 32'd0;\n"
+        << "    // One 16-bit hit counter per regex\n"
+        << "    reg [15:0] match_count [0:15];\n"
+        << "    integer ci;\n"
+        << "    initial begin\n"
+        << "        for (ci = 0; ci < 16; ci = ci + 1)\n"
+        << "            match_count[ci] = 16'd0;\n"
+        << "    end\n\n";
+
+    // uart_tx + TX drain sub-FSM
+    out << "    // UART TX & Drain Sub-FSM\n"
+        << "    localparam TX_BUF_LEN = 128;\n"
+        << "    reg [7:0] tx_buf [0:TX_BUF_LEN-1];\n"
+        << "    reg [6:0] tx_len  = 7'd0;\n"
+        << "    reg [6:0] tx_ptr  = 7'd0;\n"
+        << "    reg       tx_send = 1'b0;  // pulse: start draining tx_buf\n\n"
+        << "    wire      tx_busy;\n"
+        << "    reg       tx_start_r = 1'b0;\n"
+        << "    reg [7:0] tx_data_r  = 8'd0;\n\n"
+        << "    uart_tx #(.CLKS_PER_BIT(CLKS_PER_BIT)) uart_tx_inst (\n"
+        << "        .clk     (clk),\n"
+        << "        .rst     (rst_btn),\n"
+        << "        .tx_data (tx_data_r),\n"
+        << "        .tx_start(tx_start_r),\n"
+        << "        .tx_busy (tx_busy),\n"
+        << "        .tx      (uart_tx_pin)\n"
+        << "    );\n\n"
+        << "    // hex nibble → ASCII character\n"
+        << "    function [7:0] hex_char;\n"
+        << "        input [3:0] nibble;\n"
+        << "        begin\n"
+        << "            hex_char = (nibble < 4'd10) ? (8'd48 + nibble) : (8'd55 + nibble);\n"
+        << "        end\n"
+        << "    endfunction\n\n"
+        << "    localparam TX_IDLE = 2'd0, TX_LOAD = 2'd1, TX_WAIT = 2'd2, TX_NEXT = 2'd3;\n"
+        << "    reg [1:0] tx_state = TX_IDLE;\n\n"
+        << "    always @(posedge clk) begin\n"
+        << "        tx_start_r <= 1'b0;\n"
+        << "        if (rst_btn) begin\n"
+        << "            tx_state <= TX_IDLE;\n"
+        << "            tx_ptr   <= 7'd0;\n"
+        << "        end else begin\n"
+        << "            case (tx_state)\n"
+        << "                TX_IDLE: if (tx_send) begin tx_ptr <= 7'd0; tx_state <= TX_LOAD; end\n"
+        << "                TX_LOAD: if (!tx_busy) begin\n"
+        << "                    tx_data_r  <= tx_buf[tx_ptr];\n"
+        << "                    tx_start_r <= 1'b1;\n"
+        << "                    tx_state   <= TX_WAIT;\n"
+        << "                end\n"
+        << "                TX_WAIT: if (tx_busy)  tx_state <= TX_NEXT;\n"
+        << "                TX_NEXT: if (!tx_busy) begin\n"
+        << "                    if (tx_ptr + 1 < tx_len) begin\n"
+        << "                        tx_ptr   <= tx_ptr + 1;\n"
+        << "                        tx_state <= TX_LOAD;\n"
+        << "                    end else\n"
+        << "                        tx_state <= TX_IDLE;\n"
+        << "                end\n"
+        << "            endcase\n"
+        << "        end\n"
+        << "    end\n\n";
+
+    // build_response Task
+    // The task is parameterised on the actual regex count at code-gen time
+    out << "    // build_response Task\n"
+        << "    // Fills tx_buf with the ASCII response packet in one clock cycle.\n"
+        << "    // Format: \"MATCH=<bits> BYTES=<8hex> HITS=<4hex per regex,csv>\\r\\n\"\n"
+        << "    reg [6:0]  bp;         // build pointer (local to task scope)\n"
+        << "    reg [15:0] tmp16;\n"
+        << "    integer    ri;\n\n"
+        << "    task build_response;\n"
+        << "        input [" << busHigh << ":0] mbits;\n"
+        << "        input [31:0]          bcount;\n"
+        << "        integer k;\n"
+        << "        begin : build_task\n"
+        << "            integer p;\n"
+        << "            p = 0;\n"
+        << "            // \"MATCH=\"\n"
+        << "            tx_buf[p]=8'h4D; p=p+1;  // M\n"
+        << "            tx_buf[p]=8'h41; p=p+1;  // A\n"
+        << "            tx_buf[p]=8'h54; p=p+1;  // T\n"
+        << "            tx_buf[p]=8'h43; p=p+1;  // C\n"
+        << "            tx_buf[p]=8'h48; p=p+1;  // H\n"
+        << "            tx_buf[p]=8'h3D; p=p+1;  // =\n"
+        << "            // match bits, MSB first\n";
+
+    // Unroll the match-bit loop at C++ code-gen time for exact bit count
+    for (int b = static_cast<int>(numNFAs) - 1; b >= 0; --b)
+    {
+        out << "            tx_buf[p] = (mbits[" << b << "]) ? 8'h31 : 8'h30; p=p+1;\n";
+    }
+
+    out << "            // \" BYTES=\"\n"
+        << "            tx_buf[p]=8'h20; p=p+1;\n"
+        << "            tx_buf[p]=8'h42; p=p+1;  // B\n"
+        << "            tx_buf[p]=8'h59; p=p+1;  // Y\n"
+        << "            tx_buf[p]=8'h54; p=p+1;  // T\n"
+        << "            tx_buf[p]=8'h45; p=p+1;  // E\n"
+        << "            tx_buf[p]=8'h53; p=p+1;  // S\n"
+        << "            tx_buf[p]=8'h3D; p=p+1;  // =\n"
+        << "            tx_buf[p]=hex_char(bcount[31:28]); p=p+1;\n"
+        << "            tx_buf[p]=hex_char(bcount[27:24]); p=p+1;\n"
+        << "            tx_buf[p]=hex_char(bcount[23:20]); p=p+1;\n"
+        << "            tx_buf[p]=hex_char(bcount[19:16]); p=p+1;\n"
+        << "            tx_buf[p]=hex_char(bcount[15:12]); p=p+1;\n"
+        << "            tx_buf[p]=hex_char(bcount[11: 8]); p=p+1;\n"
+        << "            tx_buf[p]=hex_char(bcount[ 7: 4]); p=p+1;\n"
+        << "            tx_buf[p]=hex_char(bcount[ 3: 0]); p=p+1;\n"
+        << "            // \" HITS=\"\n"
+        << "            tx_buf[p]=8'h20; p=p+1;\n"
+        << "            tx_buf[p]=8'h48; p=p+1;  // H\n"
+        << "            tx_buf[p]=8'h49; p=p+1;  // I\n"
+        << "            tx_buf[p]=8'h54; p=p+1;  // T\n"
+        << "            tx_buf[p]=8'h53; p=p+1;  // S\n"
+        << "            tx_buf[p]=8'h3D; p=p+1;  // =\n";
+
+    // Unroll the per-regex hits loop at C++ code-gen time
+    for (size_t k = 0; k < numNFAs; ++k)
+    {
+        out << "            tmp16 = match_count[" << k << "];\n"
+            << "            tx_buf[p]=hex_char(tmp16[15:12]); p=p+1;\n"
+            << "            tx_buf[p]=hex_char(tmp16[11: 8]); p=p+1;\n"
+            << "            tx_buf[p]=hex_char(tmp16[ 7: 4]); p=p+1;\n"
+            << "            tx_buf[p]=hex_char(tmp16[ 3: 0]); p=p+1;\n";
+        if (k < numNFAs - 1)
+            out << "            tx_buf[p]=8'h2C; p=p+1;  // ','\n";
+    }
+
+    out << "            tx_buf[p]=8'h0D; p=p+1;  // CR\n"
+        << "            tx_buf[p]=8'h0A; p=p+1;  // LF\n"
+        << "            tx_len = p[6:0];\n"
+        << "        end\n"
+        << "    endtask\n\n";
+
+    // Main Control FSM
+    out << "    // Main Control FSM\n"
+        << "    localparam S_IDLE      = 4'd0;\n"
+        << "    localparam S_FETCH     = 4'd1;\n"
+        << "    localparam S_DECODE    = 4'd2;\n"
+        << "    localparam S_CHAR_LOAD = 4'd3;\n"
+        << "    localparam S_CHAR_STEP = 4'd4;\n"
+        << "    localparam S_EOL_END   = 4'd5;\n"
+        << "    localparam S_EOL_MATCH = 4'd6;\n"
+        << "    localparam S_EOL_LATCH = 4'd7;\n"
+        << "    localparam S_TX_ARM    = 4'd8;\n"
+        << "    localparam S_TX_WAIT   = 4'd9;\n"
+        << "    localparam S_RESET_NFA = 4'd10;\n"
+        << "    localparam S_QUERY_TX  = 4'd11;\n\n"
+        << "    reg [3:0] state = S_RESET_NFA;\n\n"
+        << "    reg [" << busHigh << ":0] snap_match = " << numNFAs << "'b0;\n"
+        << "    reg [31:0]          snap_bytes = 32'd0;\n"
+        << "    integer k;\n\n"
+        << "    always @(posedge clk) begin\n"
+        << "        tx_send    <= 1'b0;\n"
+        << "        fifo_rd_en <= 1'b0;\n"
+        << "        nfa_en     <= 1'b0;\n"
+        << "        nfa_start  <= 1'b0;\n\n"
+        << "        if (rst_btn) begin\n"
+        << "            state      <= S_RESET_NFA;\n"
+        << "            match_leds <= " << numNFAs << "'b0;\n"
+        << "            byte_count <= 32'd0;\n"
+        << "            for (k = 0; k < 16; k = k + 1)\n"
+        << "                match_count[k] <= 16'd0;\n"
+        << "        end else begin\n"
+        << "            case (state)\n\n"
+        << "                S_IDLE: begin\n"
+        << "                    nfa_end_of_str <= 1'b0;\n"
+        << "                    if (!fifo_empty) state <= S_FETCH;\n"
+        << "                end\n\n"
+        << "                S_FETCH: begin\n"
+        << "                    fifo_rd_en <= 1'b1;\n"
+        << "                    state      <= S_DECODE;\n"
+        << "                end\n\n"
+        << "                S_DECODE: begin\n"
+        << "                    if (fifo_rd_data == 8'h0A || fifo_rd_data == 8'h0D) begin\n"
+        << "                        nfa_end_of_str <= 1'b1;\n"
+        << "                        state          <= S_EOL_END;\n"
+        << "                    end else if (fifo_rd_data == 8'h3F) begin  // '?'\n"
+        << "                        state <= S_QUERY_TX;\n"
+        << "                    end else begin\n"
+        << "                        nfa_char_in <= fifo_rd_data;\n"
+        << "                        state       <= S_CHAR_LOAD;\n"
+        << "                    end\n"
+        << "                end\n\n"
+        << "                S_CHAR_LOAD: state <= S_CHAR_STEP;\n\n"
+        << "                S_CHAR_STEP: begin\n"
+        << "                    nfa_en     <= 1'b1;\n"
+        << "                    byte_count <= byte_count + 1;\n"
+        << "                    state      <= S_IDLE;\n"
+        << "                end\n\n"
+        << "                S_EOL_END: begin\n"
+        << "                    nfa_en <= 1'b1;\n"
+        << "                    state  <= S_EOL_MATCH;\n"
+        << "                end\n\n"
+        << "                S_EOL_MATCH: begin\n"
+        << "                    nfa_en         <= 1'b1;\n"
+        << "                    nfa_end_of_str <= 1'b0;\n"
+        << "                    state          <= S_EOL_LATCH;\n"
+        << "                end\n\n"
+        << "                S_EOL_LATCH: begin\n"
+        << "                    snap_match <= match_bus;\n"
+        << "                    snap_bytes <= byte_count;\n"
+        << "                    match_leds <= match_bus;\n"
+        << "                    for (k = 0; k < " << numNFAs << "; k = k + 1)\n"
+        << "                        if (match_bus[k]) match_count[k] <= match_count[k] + 16'd1;\n"
+        << "                    state <= S_TX_ARM;\n"
+        << "                end\n\n"
+        << "                S_TX_ARM: begin\n"
+        << "                    build_response(snap_match, snap_bytes);\n"
+        << "                    tx_send <= 1'b1;\n"
+        << "                    state   <= S_TX_WAIT;\n"
+        << "                end\n\n"
+        << "                S_TX_WAIT:\n"
+        << "                    if (tx_state == TX_IDLE && !tx_send) state <= S_RESET_NFA;\n\n"
+        << "                S_RESET_NFA: begin\n"
+        << "                    nfa_start <= 1'b1;\n"
+        << "                    nfa_en    <= 1'b1;\n"
+        << "                    state     <= S_IDLE;\n"
+        << "                end\n\n"
+        << "                S_QUERY_TX: begin\n"
+        << "                    build_response(" << numNFAs << "'b0, byte_count);\n"
+        << "                    tx_send <= 1'b1;\n"
+        << "                    state   <= S_TX_WAIT;\n"
+        << "                end\n\n"
+        << "                default: state <= S_IDLE;\n"
+        << "            endcase\n"
+        << "        end\n"
+        << "    end\n\n"
+        << "endmodule\n";
+}
+
+// =============================================================================
+// emitConstraints — constraints.xdc
+// =============================================================================
+void Emitter::emitConstraints(const std::vector<std::unique_ptr<NFA>> &nfas, const std::filesystem::path &outputDir)
+{
+    auto filePath = outputDir / "constraints.xdc";
+    std::ofstream out(filePath);
+    out.exceptions(std::ofstream::failbit | std::ofstream::badbit);
+
+    out << "## Clock signal (Nexys A7 100MHz)\n"
+        << "set_property PACKAGE_PIN E3 [get_ports clk]\n"
+        << "set_property IOSTANDARD LVCMOS33 [get_ports clk]\n"
+        << "create_clock -add -name sys_clk_pin -period 10.00 -waveform {0 5} [get_ports clk]\n\n";
+
+    out << "## USB-RS232 Interface (Nexys A7)\n"
+        << "set_property PACKAGE_PIN C4 [get_ports uart_rx_pin]\n"
+        << "set_property IOSTANDARD LVCMOS33 [get_ports uart_rx_pin]\n\n"
+        << "set_property PACKAGE_PIN D4 [get_ports uart_tx_pin]\n"
+        << "set_property IOSTANDARD LVCMOS33 [get_ports uart_tx_pin]\n\n";
+
+    out << "## Buttons (Nexys A7 Center Button - BTNC)\n"
+        << "set_property PACKAGE_PIN N17 [get_ports rst_btn]\n"
+        << "set_property IOSTANDARD LVCMOS33 [get_ports rst_btn]\n\n";
+
+    out << "## LEDs (Nexys A7 LED0 to LED15)\n";
+    std::vector<std::string> led_pins = {
+        "H17", "K15", "J13", "N14", "R18", "V17", "U17", "U16",
+        "V16", "T15", "U14", "T16", "V15", "V14", "V12", "V11"};
+    for (size_t i = 0; i < nfas.size() && i < led_pins.size(); ++i)
+    {
+        out << "set_property PACKAGE_PIN " << led_pins[i] << " [get_ports {match_leds[" << i << "]}]\n"
+            << "set_property IOSTANDARD LVCMOS33 [get_ports {match_leds[" << i << "]}]\n";
+    }
+}
