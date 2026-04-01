@@ -10,3 +10,19 @@ module top (
     output wire [5:0] match_bus
 );
 
+    nfa_0 inst_0 (
+        .clk(clk), .en(en), .rst(rst), .start(start), .end_of_str(end_of_str), .char_in(char_in), .match(match_bus[0])
+    );
+
+    nfa_1 inst_1 (
+        .clk(clk), .en(en), .rst(rst), .start(start), .end_of_str(end_of_str), .char_in(char_in), .match(match_bus[1])
+    );
+
+    nfa_2 inst_2 (
+        .clk(clk), .en(en), .rst(rst), .start(start), .end_of_str(end_of_str), .char_in(char_in), .match(match_bus[2])
+    );
+
+    nfa_3 inst_3 (
+        .clk(clk), .en(en), .rst(rst), .start(start), .end_of_str(end_of_str), .char_in(char_in), .match(match_bus[3])
+    );
+
