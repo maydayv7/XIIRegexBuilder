@@ -26,3 +26,12 @@ module top (
         .clk(clk), .en(en), .rst(rst), .start(start), .end_of_str(end_of_str), .char_in(char_in), .match(match_bus[3])
     );
 
+    nfa_4 inst_4 (
+        .clk(clk), .en(en), .rst(rst), .start(start), .end_of_str(end_of_str), .char_in(char_in), .match(match_bus[4])
+    );
+
+    nfa_5 inst_5 (
+        .clk(clk), .en(en), .rst(rst), .start(start), .end_of_str(end_of_str), .char_in(char_in), .match(match_bus[5])
+    );
+
+endmodule

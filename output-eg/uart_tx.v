@@ -61,3 +61,22 @@ module uart_tx #(
                         if (bit_idx < 7)
                             bit_idx <= bit_idx + 1;
                         else begin
+                            bit_idx <= 3'd0;
+                            state   <= S_STOP_BIT;
+                        end
+                    end
+                end
+                S_STOP_BIT: begin
+                    tx <= 1'b1;
+                    if (clk_cnt < CLKS_PER_BIT - 1)
+                        clk_cnt <= clk_cnt + 1;
+                    else begin
+                        clk_cnt <= 10'd0;
+                        state   <= S_IDLE;
+                    end
+                end
+                default: state <= S_IDLE;
+            endcase
+        end
+    end
+endmodule
