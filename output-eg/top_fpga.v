@@ -148,3 +148,195 @@ module top_fpga #(
         input [31:0]          bcount;
         integer k;
         begin : build_task
+            integer p;
+            p = 0;
+            // "MATCH="
+            tx_buf[p]=8'h4D; p=p+1;  // M
+            tx_buf[p]=8'h41; p=p+1;  // A
+            tx_buf[p]=8'h54; p=p+1;  // T
+            tx_buf[p]=8'h43; p=p+1;  // C
+            tx_buf[p]=8'h48; p=p+1;  // H
+            tx_buf[p]=8'h3D; p=p+1;  // =
+            // match bits, MSB first
+            tx_buf[p] = (mbits[5]) ? 8'h31 : 8'h30; p=p+1;
+            tx_buf[p] = (mbits[4]) ? 8'h31 : 8'h30; p=p+1;
+            tx_buf[p] = (mbits[3]) ? 8'h31 : 8'h30; p=p+1;
+            tx_buf[p] = (mbits[2]) ? 8'h31 : 8'h30; p=p+1;
+            tx_buf[p] = (mbits[1]) ? 8'h31 : 8'h30; p=p+1;
+            tx_buf[p] = (mbits[0]) ? 8'h31 : 8'h30; p=p+1;
+            // " BYTES="
+            tx_buf[p]=8'h20; p=p+1;
+            tx_buf[p]=8'h42; p=p+1;  // B
+            tx_buf[p]=8'h59; p=p+1;  // Y
+            tx_buf[p]=8'h54; p=p+1;  // T
+            tx_buf[p]=8'h45; p=p+1;  // E
+            tx_buf[p]=8'h53; p=p+1;  // S
+            tx_buf[p]=8'h3D; p=p+1;  // =
+            tx_buf[p]=hex_char(bcount[31:28]); p=p+1;
+            tx_buf[p]=hex_char(bcount[27:24]); p=p+1;
+            tx_buf[p]=hex_char(bcount[23:20]); p=p+1;
+            tx_buf[p]=hex_char(bcount[19:16]); p=p+1;
+            tx_buf[p]=hex_char(bcount[15:12]); p=p+1;
+            tx_buf[p]=hex_char(bcount[11: 8]); p=p+1;
+            tx_buf[p]=hex_char(bcount[ 7: 4]); p=p+1;
+            tx_buf[p]=hex_char(bcount[ 3: 0]); p=p+1;
+            // " HITS="
+            tx_buf[p]=8'h20; p=p+1;
+            tx_buf[p]=8'h48; p=p+1;  // H
+            tx_buf[p]=8'h49; p=p+1;  // I
+            tx_buf[p]=8'h54; p=p+1;  // T
+            tx_buf[p]=8'h53; p=p+1;  // S
+            tx_buf[p]=8'h3D; p=p+1;  // =
+            tmp16 = match_count[0];
+            tx_buf[p]=hex_char(tmp16[15:12]); p=p+1;
+            tx_buf[p]=hex_char(tmp16[11: 8]); p=p+1;
+            tx_buf[p]=hex_char(tmp16[ 7: 4]); p=p+1;
+            tx_buf[p]=hex_char(tmp16[ 3: 0]); p=p+1;
+            tx_buf[p]=8'h2C; p=p+1;  // ','
+            tmp16 = match_count[1];
+            tx_buf[p]=hex_char(tmp16[15:12]); p=p+1;
+            tx_buf[p]=hex_char(tmp16[11: 8]); p=p+1;
+            tx_buf[p]=hex_char(tmp16[ 7: 4]); p=p+1;
+            tx_buf[p]=hex_char(tmp16[ 3: 0]); p=p+1;
+            tx_buf[p]=8'h2C; p=p+1;  // ','
+            tmp16 = match_count[2];
+            tx_buf[p]=hex_char(tmp16[15:12]); p=p+1;
+            tx_buf[p]=hex_char(tmp16[11: 8]); p=p+1;
+            tx_buf[p]=hex_char(tmp16[ 7: 4]); p=p+1;
+            tx_buf[p]=hex_char(tmp16[ 3: 0]); p=p+1;
+            tx_buf[p]=8'h2C; p=p+1;  // ','
+            tmp16 = match_count[3];
+            tx_buf[p]=hex_char(tmp16[15:12]); p=p+1;
+            tx_buf[p]=hex_char(tmp16[11: 8]); p=p+1;
+            tx_buf[p]=hex_char(tmp16[ 7: 4]); p=p+1;
+            tx_buf[p]=hex_char(tmp16[ 3: 0]); p=p+1;
+            tx_buf[p]=8'h2C; p=p+1;  // ','
+            tmp16 = match_count[4];
+            tx_buf[p]=hex_char(tmp16[15:12]); p=p+1;
+            tx_buf[p]=hex_char(tmp16[11: 8]); p=p+1;
+            tx_buf[p]=hex_char(tmp16[ 7: 4]); p=p+1;
+            tx_buf[p]=hex_char(tmp16[ 3: 0]); p=p+1;
+            tx_buf[p]=8'h2C; p=p+1;  // ','
+            tmp16 = match_count[5];
+            tx_buf[p]=hex_char(tmp16[15:12]); p=p+1;
+            tx_buf[p]=hex_char(tmp16[11: 8]); p=p+1;
+            tx_buf[p]=hex_char(tmp16[ 7: 4]); p=p+1;
+            tx_buf[p]=hex_char(tmp16[ 3: 0]); p=p+1;
+            tx_buf[p]=8'h0D; p=p+1;  // CR
+            tx_buf[p]=8'h0A; p=p+1;  // LF
+            tx_len = p[6:0];
+        end
+    endtask
+
+    // Main Control FSM
+    localparam S_IDLE      = 4'd0;
+    localparam S_FETCH     = 4'd1;
+    localparam S_DECODE    = 4'd2;
+    localparam S_CHAR_LOAD = 4'd3;
+    localparam S_CHAR_STEP = 4'd4;
+    localparam S_EOL_END   = 4'd5;
+    localparam S_EOL_MATCH = 4'd6;
+    localparam S_EOL_LATCH = 4'd7;
+    localparam S_TX_ARM    = 4'd8;
+    localparam S_TX_WAIT   = 4'd9;
+    localparam S_RESET_NFA = 4'd10;
+    localparam S_QUERY_TX  = 4'd11;
+
+    reg [3:0] state = S_RESET_NFA;
+
+    reg [5:0] snap_match = 6'b0;
+    reg [31:0]          snap_bytes = 32'd0;
+    integer k;
+
+    always @(posedge clk) begin
+        tx_send    <= 1'b0;
+        fifo_rd_en <= 1'b0;
+        nfa_en     <= 1'b0;
+        nfa_start  <= 1'b0;
+
+        if (rst_btn) begin
+            state      <= S_RESET_NFA;
+            match_leds <= 6'b0;
+            byte_count <= 32'd0;
+            for (k = 0; k < 16; k = k + 1)
+                match_count[k] <= 16'd0;
+        end else begin
+            case (state)
+
+                S_IDLE: begin
+                    nfa_end_of_str <= 1'b0;
+                    if (!fifo_empty) state <= S_FETCH;
+                end
+
+                S_FETCH: begin
+                    fifo_rd_en <= 1'b1;
+                    state      <= S_DECODE;
+                end
+
+                S_DECODE: begin
+                    if (fifo_rd_data == 8'h0A || fifo_rd_data == 8'h0D) begin
+                        nfa_end_of_str <= 1'b1;
+                        state          <= S_EOL_END;
+                    end else if (fifo_rd_data == 8'h3F) begin  // '?'
+                        state <= S_QUERY_TX;
+                    end else begin
+                        nfa_char_in <= fifo_rd_data;
+                        state       <= S_CHAR_LOAD;
+                    end
+                end
+
+                S_CHAR_LOAD: state <= S_CHAR_STEP;
+
+                S_CHAR_STEP: begin
+                    nfa_en     <= 1'b1;
+                    byte_count <= byte_count + 1;
+                    state      <= S_IDLE;
+                end
+
+                S_EOL_END: begin
+                    nfa_en <= 1'b1;
+                    state  <= S_EOL_MATCH;
+                end
+
+                S_EOL_MATCH: begin
+                    nfa_en         <= 1'b1;
+                    nfa_end_of_str <= 1'b0;
+                    state          <= S_EOL_LATCH;
+                end
+
+                S_EOL_LATCH: begin
+                    snap_match <= match_bus;
+                    snap_bytes <= byte_count;
+                    match_leds <= match_bus;
+                    for (k = 0; k < 6; k = k + 1)
+                        if (match_bus[k]) match_count[k] <= match_count[k] + 16'd1;
+                    state <= S_TX_ARM;
+                end
+
+                S_TX_ARM: begin
+                    build_response(snap_match, snap_bytes);
+                    tx_send <= 1'b1;
+                    state   <= S_TX_WAIT;
+                end
+
+                S_TX_WAIT:
+                    if (tx_state == TX_IDLE && !tx_send) state <= S_RESET_NFA;
+
+                S_RESET_NFA: begin
+                    nfa_start <= 1'b1;
+                    nfa_en    <= 1'b1;
+                    state     <= S_IDLE;
+                end
+
+                S_QUERY_TX: begin
+                    build_response(6'b0, byte_count);
+                    tx_send <= 1'b1;
+                    state   <= S_TX_WAIT;
+                end
+
+                default: state <= S_IDLE;
+            endcase
+        end
+    end
+
+endmodule
