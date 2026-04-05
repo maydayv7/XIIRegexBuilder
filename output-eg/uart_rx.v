@@ -38,3 +38,16 @@ module uart_rx #(
                     rx_data[bit_idx] <= rx;
                     if (bit_idx < 7) bit_idx <= bit_idx + 1;
                     else state <= STOP_BIT;
+                end
+            end
+            STOP_BIT: begin
+                if (clk_count < CLKS_PER_BIT-1) begin
+                    clk_count <= clk_count + 1;
+                end else begin
+                    if (rx == 1'b1) rx_ready <= 1'b1;
+                    state <= IDLE;
+                end
+            end
+        endcase
+    end
+endmodule

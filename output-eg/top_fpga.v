@@ -113,3 +113,38 @@ module top_fpga #(
 
     always @(posedge clk) begin
         tx_start_r <= 1'b0;
+        if (rst_btn) begin
+            tx_state <= TX_IDLE;
+            tx_ptr   <= 7'd0;
+        end else begin
+            case (tx_state)
+                TX_IDLE: if (tx_send) begin tx_ptr <= 7'd0; tx_state <= TX_LOAD; end
+                TX_LOAD: if (!tx_busy) begin
+                    tx_data_r  <= tx_buf[tx_ptr];
+                    tx_start_r <= 1'b1;
+                    tx_state   <= TX_WAIT;
+                end
+                TX_WAIT: if (tx_busy)  tx_state <= TX_NEXT;
+                TX_NEXT: if (!tx_busy) begin
+                    if (tx_ptr + 1 < tx_len) begin
+                        tx_ptr   <= tx_ptr + 1;
+                        tx_state <= TX_LOAD;
+                    end else
+                        tx_state <= TX_IDLE;
+                end
+            endcase
+        end
+    end
+
+    // build_response Task
+    // Fills tx_buf with the ASCII response packet in one clock cycle.
+    // Format: "MATCH=<bits> BYTES=<8hex> HITS=<4hex per regex,csv>\r\n"
+    reg [6:0]  bp;         // build pointer (local to task scope)
+    reg [15:0] tmp16;
+    integer    ri;
+
+    task build_response;
+        input [5:0] mbits;
+        input [31:0]          bcount;
+        integer k;
+        begin : build_task
