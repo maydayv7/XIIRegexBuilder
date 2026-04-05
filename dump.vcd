@@ -1,0 +1,300 @@
+$date
+   Tue Mar 31 10:02:33 2026
+$end
+
+$version
+  2025.2
+  $dumpfile ("dump.vcd") 
+$end
+
+$timescale
+  1ps
+$end
+
+$scope module tb_top $end
+$var reg 1 ! clk $end
+$var reg 1 " en $end
+$var reg 1 # rst $end
+$var reg 1 $ start $end
+$var reg 1 % end_of_str $end
+$var reg 8 & char_in [7:0] $end
+$var wire 6 ' match_bus [5:0] $end
+$scope module uut $end
+$var wire 1 ( clk $end
+$var wire 1 ) en $end
+$var wire 1 * rst $end
+$var wire 1 + start $end
+$var wire 1 , end_of_str $end
+$var wire 8 - char_in [7:0] $end
+$var wire 6 ' match_bus [5:0] $end
+$scope module inst_0 $end
+$var wire 1 ( clk $end
+$var wire 1 ) en $end
+$var wire 1 * rst $end
+$var wire 1 + start $end
+$var wire 1 , end_of_str $end
+$var wire 8 - char_in [7:0] $end
+$var reg 1 . match $end
+$var reg 3 / state_reg [2:0] $end
+$var wire 3 0 next_state [2:0] $end
+$upscope $end
+$scope module inst_1 $end
+$var wire 1 ( clk $end
+$var wire 1 ) en $end
+$var wire 1 * rst $end
+$var wire 1 + start $end
+$var wire 1 , end_of_str $end
+$var wire 8 - char_in [7:0] $end
+$var reg 1 1 match $end
+$var reg 4 2 state_reg [3:0] $end
+$var wire 4 3 next_state [3:0] $end
+$upscope $end
+$scope module inst_2 $end
+$var wire 1 ( clk $end
+$var wire 1 ) en $end
+$var wire 1 * rst $end
+$var wire 1 + start $end
+$var wire 1 , end_of_str $end
+$var wire 8 - char_in [7:0] $end
+$var reg 1 4 match $end
+$var reg 4 5 state_reg [3:0] $end
+$var wire 4 6 next_state [3:0] $end
+$upscope $end
+$scope module inst_3 $end
+$var wire 1 ( clk $end
+$var wire 1 ) en $end
+$var wire 1 * rst $end
+$var wire 1 + start $end
+$var wire 1 , end_of_str $end
+$var wire 8 - char_in [7:0] $end
+$var reg 1 7 match $end
+$var reg 4 8 state_reg [3:0] $end
+$var wire 4 9 next_state [3:0] $end
+$upscope $end
+$scope module inst_4 $end
+$var wire 1 ( clk $end
+$var wire 1 ) en $end
+$var wire 1 * rst $end
+$var wire 1 + start $end
+$var wire 1 , end_of_str $end
+$var wire 8 - char_in [7:0] $end
+$var reg 1 : match $end
+$var reg 4 ; state_reg [3:0] $end
+$var wire 4 < next_state [3:0] $end
+$upscope $end
+$scope module inst_5 $end
+$var wire 1 ( clk $end
+$var wire 1 ) en $end
+$var wire 1 * rst $end
+$var wire 1 + start $end
+$var wire 1 , end_of_str $end
+$var wire 8 - char_in [7:0] $end
+$var reg 1 = match $end
+$var reg 6 > state_reg [5:0] $end
+$var wire 6 ? next_state [5:0] $end
+$upscope $end
+$upscope $end
+$upscope $end
+$enddefinitions $end
+
+#0
+$dumpvars
+0!
+1"
+1#
+0$
+0%
+b0 &
+bx '
+0(
+1)
+1*
+0+
+0,
+b0 -
+x.
+bx /
+b0 0
+x1
+bx 2
+b0 3
+x4
+bx 5
+b0 6
+x7
+bx 8
+b0 9
+x:
+bx ;
+b0 <
+x=
+bx >
+b0 ?
+$end
+
+#5000
+1!
+b0 '
+1(
+0.
+b1 /
+01
+b1 2
+04
+b1 5
+07
+b1 8
+0:
+b1 ;
+0=
+b1 >
+
+#10000
+0!
+0(
+
+#15000
+1!
+1(
+
+#20000
+0!
+0#
+0(
+0*
+
+#25000
+1!
+1(
+b0 /
+b0 2
+b0 5
+b0 8
+b0 ;
+b0 >
+
+#30000
+0!
+1$
+0(
+1+
+
+#35000
+1!
+1(
+b1 /
+b1 2
+b1 5
+b1 8
+b1 ;
+b1 >
+
+#40000
+0!
+0$
+b1100001 &
+0(
+0+
+b1100001 -
+b10 0
+b10 3
+b10 6
+b10 9
+b10 <
+b10 ?
+
+#45000
+1!
+1(
+b10 /
+b0 0
+b10 2
+b0 3
+b10 5
+b10 8
+b100 9
+b10 ;
+b0 <
+b10 >
+
+#50000
+0!
+1%
+0(
+1,
+
+#55000
+1!
+b101 '
+1(
+1.
+b0 /
+b0 2
+14
+b100 8
+b0 9
+b0 ;
+
+#60000
+0!
+0%
+0(
+0,
+
+#65000
+1!
+b0 '
+1(
+0.
+04
+b0 8
+
+#70000
+0!
+1$
+0(
+1+
+
+#75000
+1!
+1(
+b1 /
+b10 0
+b1 2
+b10 3
+b1 5
+b1 8
+b10 9
+b1 ;
+b10 <
+b1 >
+
+#80000
+0!
+0$
+b1100010 &
+0(
+0+
+b1100010 -
+b100 0
+b0 3
+b100 6
+b0 9
+b0 <
+b100 ?
+
+#85000
+1!
+1(
+b100 /
+b0 0
+b0 2
+b100 5
+b0 8
+b0 ;
+b100 >
+
+#90000
+0!
+1%
+0(
