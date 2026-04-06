@@ -148,3 +148,66 @@ module top_fpga #(
         input [31:0]          bcount;
         integer k;
         begin : build_task
+            integer p;
+            p = 0;
+            // "MATCH="
+            tx_buf[p]=8'h4D; p=p+1;  // M
+            tx_buf[p]=8'h41; p=p+1;  // A
+            tx_buf[p]=8'h54; p=p+1;  // T
+            tx_buf[p]=8'h43; p=p+1;  // C
+            tx_buf[p]=8'h48; p=p+1;  // H
+            tx_buf[p]=8'h3D; p=p+1;  // =
+            // match bits, MSB first
+            tx_buf[p] = (mbits[5]) ? 8'h31 : 8'h30; p=p+1;
+            tx_buf[p] = (mbits[4]) ? 8'h31 : 8'h30; p=p+1;
+            tx_buf[p] = (mbits[3]) ? 8'h31 : 8'h30; p=p+1;
+            tx_buf[p] = (mbits[2]) ? 8'h31 : 8'h30; p=p+1;
+            tx_buf[p] = (mbits[1]) ? 8'h31 : 8'h30; p=p+1;
+            tx_buf[p] = (mbits[0]) ? 8'h31 : 8'h30; p=p+1;
+            // " BYTES="
+            tx_buf[p]=8'h20; p=p+1;
+            tx_buf[p]=8'h42; p=p+1;  // B
+            tx_buf[p]=8'h59; p=p+1;  // Y
+            tx_buf[p]=8'h54; p=p+1;  // T
+            tx_buf[p]=8'h45; p=p+1;  // E
+            tx_buf[p]=8'h53; p=p+1;  // S
+            tx_buf[p]=8'h3D; p=p+1;  // =
+            tx_buf[p]=hex_char(bcount[31:28]); p=p+1;
+            tx_buf[p]=hex_char(bcount[27:24]); p=p+1;
+            tx_buf[p]=hex_char(bcount[23:20]); p=p+1;
+            tx_buf[p]=hex_char(bcount[19:16]); p=p+1;
+            tx_buf[p]=hex_char(bcount[15:12]); p=p+1;
+            tx_buf[p]=hex_char(bcount[11: 8]); p=p+1;
+            tx_buf[p]=hex_char(bcount[ 7: 4]); p=p+1;
+            tx_buf[p]=hex_char(bcount[ 3: 0]); p=p+1;
+            // " HITS="
+            tx_buf[p]=8'h20; p=p+1;
+            tx_buf[p]=8'h48; p=p+1;  // H
+            tx_buf[p]=8'h49; p=p+1;  // I
+            tx_buf[p]=8'h54; p=p+1;  // T
+            tx_buf[p]=8'h53; p=p+1;  // S
+            tx_buf[p]=8'h3D; p=p+1;  // =
+            tmp16 = match_count[0];
+            tx_buf[p]=hex_char(tmp16[15:12]); p=p+1;
+            tx_buf[p]=hex_char(tmp16[11: 8]); p=p+1;
+            tx_buf[p]=hex_char(tmp16[ 7: 4]); p=p+1;
+            tx_buf[p]=hex_char(tmp16[ 3: 0]); p=p+1;
+            tx_buf[p]=8'h2C; p=p+1;  // ','
+            tmp16 = match_count[1];
+            tx_buf[p]=hex_char(tmp16[15:12]); p=p+1;
+            tx_buf[p]=hex_char(tmp16[11: 8]); p=p+1;
+            tx_buf[p]=hex_char(tmp16[ 7: 4]); p=p+1;
+            tx_buf[p]=hex_char(tmp16[ 3: 0]); p=p+1;
+            tx_buf[p]=8'h2C; p=p+1;  // ','
+            tmp16 = match_count[2];
+            tx_buf[p]=hex_char(tmp16[15:12]); p=p+1;
+            tx_buf[p]=hex_char(tmp16[11: 8]); p=p+1;
+            tx_buf[p]=hex_char(tmp16[ 7: 4]); p=p+1;
+            tx_buf[p]=hex_char(tmp16[ 3: 0]); p=p+1;
+            tx_buf[p]=8'h2C; p=p+1;  // ','
+            tmp16 = match_count[3];
+            tx_buf[p]=hex_char(tmp16[15:12]); p=p+1;
+            tx_buf[p]=hex_char(tmp16[11: 8]); p=p+1;
+            tx_buf[p]=hex_char(tmp16[ 7: 4]); p=p+1;
+            tx_buf[p]=hex_char(tmp16[ 3: 0]); p=p+1;
+            tx_buf[p]=8'h2C; p=p+1;  // ','
