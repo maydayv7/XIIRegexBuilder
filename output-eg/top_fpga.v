@@ -296,3 +296,47 @@ module top_fpga #(
                 S_EOL_END: begin
                     nfa_en <= 1'b1;
                     state  <= S_EOL_MATCH;
+                end
+
+                S_EOL_MATCH: begin
+                    nfa_en         <= 1'b1;
+                    nfa_end_of_str <= 1'b0;
+                    state          <= S_EOL_LATCH;
+                end
+
+                S_EOL_LATCH: begin
+                    snap_match <= match_bus;
+                    snap_bytes <= byte_count;
+                    match_leds <= match_bus;
+                    for (k = 0; k < 6; k = k + 1)
+                        if (match_bus[k]) match_count[k] <= match_count[k] + 16'd1;
+                    state <= S_TX_ARM;
+                end
+
+                S_TX_ARM: begin
+                    build_response(snap_match, snap_bytes);
+                    tx_send <= 1'b1;
+                    state   <= S_TX_WAIT;
+                end
+
+                S_TX_WAIT:
+                    if (tx_state == TX_IDLE && !tx_send) state <= S_RESET_NFA;
+
+                S_RESET_NFA: begin
+                    nfa_start <= 1'b1;
+                    nfa_en    <= 1'b1;
+                    state     <= S_IDLE;
+                end
+
+                S_QUERY_TX: begin
+                    build_response(6'b0, byte_count);
+                    tx_send <= 1'b1;
+                    state   <= S_TX_WAIT;
+                end
+
+                default: state <= S_IDLE;
+            endcase
+        end
+    end
+
+endmodule
