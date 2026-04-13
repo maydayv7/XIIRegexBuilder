@@ -1,0 +1,2033 @@
+This file is a merged representation of the entire codebase, combined into a single document by Repomix.
+
+<file_summary>
+This section contains a summary of this file.
+
+<purpose>
+This file contains a packed representation of the entire repository's contents.
+It is designed to be easily consumable by AI systems for analysis, code review,
+or other automated processes.
+</purpose>
+
+<file_format>
+The content is organized as follows:
+1. This summary section
+2. Repository information
+3. Directory structure
+4. Repository files (if enabled)
+5. Multiple file entries, each consisting of:
+  - File path as an attribute
+  - Full contents of the file
+</file_format>
+
+<usage_guidelines>
+- This file should be treated as read-only. Any changes should be made to the
+  original repository files, not this packed version.
+- When processing this file, use the file path to distinguish
+  between different files in the repository.
+- Be aware that this file may contain sensitive information. Handle it with
+  the same level of security as you would the original repository.
+</usage_guidelines>
+
+<notes>
+- Some files may have been excluded based on .gitignore rules and Repomix's configuration
+- Binary files are not included in this packed representation. Please refer to the Repository Structure section for a complete list of file paths, including binary files
+- Files matching patterns in .gitignore are excluded
+- Files matching default ignore patterns are excluded
+- Files are sorted by Git change count (files with more changes are at the bottom)
+</notes>
+
+</file_summary>
+
+<directory_structure>
+inputs/
+  regexes.txt
+  test_strings.txt
+src/
+  emitter.cpp
+  emitter.h
+  golden.cpp
+  lexer.cpp
+  lexer.h
+  main.cpp
+  nfa.cpp
+  nfa.h
+  parser_tester.cpp
+  parser.cpp
+  parser.h
+.gitignore
+details.md
+Makefile
+README.md
+Specifications.md
+usecase.md
+</directory_structure>
+
+<files>
+This section contains the contents of the repository's files.
+
+<file path="src/lexer.cpp">
+#include "lexer.h"
+#include <stdexcept>
+
+std::string tokenTypeToString(TokenType type) {
+    switch (type) {
+        case TokenType::LITERAL:   return "LITERAL";
+        case TokenType::DOT:       return "DOT";
+        case TokenType::STAR:      return "STAR";
+        case TokenType::PLUS:      return "PLUS";
+        case TokenType::QUESTION:  return "QUESTION";
+        case TokenType::PIPE:      return "PIPE";
+        case TokenType::LPAREN:    return "LPAREN";
+        case TokenType::RPAREN:    return "RPAREN";
+        case TokenType::END_OF_INPUT: return "END_OF_INPUT";
+        default:                   return "UNKNOWN";
+    }
+}
+
+Lexer::Lexer(const std::string& input, int lineNum)
+    : input(input), pos(0), line(lineNum), col(1) {}
+
+char Lexer::peek() const {
+    if (isAtEnd()) return '\0';
+    return input[pos];
+}
+
+char Lexer::advance() {
+    char current = input[pos++];
+    col++;
+    return current;
+}
+
+bool Lexer::isAtEnd() const {
+    return pos >= input.length();
+}
+
+std::vector<Token> Lexer::tokenize() {
+    std::vector<Token> tokens;
+
+    while (!isAtEnd()) {
+        char c = peek();
+        int currentCharCol = col;
+
+        switch (c) {
+            case '.':
+                tokens.emplace_back(TokenType::DOT, advance(), line, currentCharCol);
+                break;
+            case '*':
+                tokens.emplace_back(TokenType::STAR, advance(), line, currentCharCol);
+                break;
+            case '+':
+                tokens.emplace_back(TokenType::PLUS, advance(), line, currentCharCol);
+                break;
+            case '?':
+                tokens.emplace_back(TokenType::QUESTION, advance(), line, currentCharCol);
+                break;
+            case '|':
+                tokens.emplace_back(TokenType::PIPE, advance(), line, currentCharCol);
+                break;
+            case '(':
+                tokens.emplace_back(TokenType::LPAREN, advance(), line, currentCharCol);
+                break;
+            case ')':
+                tokens.emplace_back(TokenType::RPAREN, advance(), line, currentCharCol);
+                break;
+            default:
+                if (c >= 32 && c <= 126) {
+                    tokens.emplace_back(TokenType::LITERAL, advance(), line, currentCharCol);
+                } else {
+                    throw std::runtime_error("Invalid character at line " + std::to_string(line) + 
+                                             ", column " + std::to_string(currentCharCol) + ": code " + std::to_string(static_cast<unsigned char>(c)));
+                }
+                break;
+        }
+    }
+
+    tokens.emplace_back(TokenType::END_OF_INPUT, '\0', line, col);
+    return tokens;
+}
+</file>
+
+<file path="src/lexer.h">
+#ifndef LEXER_H
+#define LEXER_H
+
+#include <string>
+#include <vector>
+#include <ostream>
+
+enum class TokenType {
+    LITERAL,
+    DOT,
+    STAR,
+    PLUS,
+    QUESTION,
+    PIPE,
+    LPAREN,
+    RPAREN,
+    END_OF_INPUT
+};
+
+struct Token {
+    TokenType type;
+    char value; // Meaningful for LITERAL, otherwise ignored or holds the char representation
+    int line;   // Useful for error reporting
+    int column; // Useful for error reporting
+
+    Token(TokenType t, char v = 0, int l = 0, int c = 0)
+        : type(t), value(v), line(l), column(c) {}
+};
+
+std::string tokenTypeToString(TokenType type);
+
+class Lexer {
+public:
+    explicit Lexer(const std::string& input, int lineNum = 0);
+    std::vector<Token> tokenize();
+
+private:
+    std::string input;
+    size_t pos;
+    int line;
+    int col;
+
+    char peek() const;
+    char advance();
+    bool isAtEnd() const;
+};
+
+#endif // LEXER_H
+</file>
+
+<file path="src/parser_tester.cpp">
+#include <iostream>
+#include <fstream>
+#include <string>
+#include <vector>
+#include <algorithm>
+#include "lexer.h"
+#include "parser.h"
+#include "nfa.h"
+
+std::string trim(const std::string& str) {
+    size_t first = str.find_first_not_of(" \t\r\n");
+    if (first == std::string::npos) return "";
+    size_t last = str.find_last_not_of(" \t\r\n");
+    return str.substr(first, (last - first + 1));
+}
+
+int main(int argc, char* argv[]) {
+    if (argc < 2) {
+        std::cerr << "Usage: " << argv[0] << " <regex_file> [test_strings_file]" << std::endl;
+        return 1;
+    }
+
+    std::string regexFilename = argv[1];
+    std::ifstream regexFile(regexFilename);
+    if (!regexFile.is_open()) {
+        std::cerr << "Failed to open " << regexFilename << std::endl;
+        return 1;
+    }
+
+    // Optional: Test strings for validation
+    std::string testFilename = (argc > 2) ? argv[2] : "";
+    std::vector<std::string> testStrings;
+    if (!testFilename.empty()) {
+        std::ifstream testFile(testFilename);
+        if (testFile.is_open()) {
+            std::string testLine;
+            while (std::getline(testFile, testLine)) {
+                std::string trimmed = trim(testLine);
+                if (trimmed.empty() || trimmed[0] == '#') continue;
+                testStrings.push_back(trimmed);
+            }
+        }
+    }
+
+    std::string line;
+    int lineNum = 0;
+    int regexIdx = 0;
+    std::vector<std::unique_ptr<NFA>> nfas;
+    std::vector<std::string> originalRegexes;
+
+    // Core Pipeline: Regex -> Tokens -> AST -> NFA
+    while (std::getline(regexFile, line)) {
+        lineNum++;
+        std::string trimmedLine = trim(line);
+        if (trimmedLine.empty() || trimmedLine[0] == '#') continue;
+
+        originalRegexes.push_back(trimmedLine);
+        Lexer lexer(trimmedLine, lineNum);
+        try {
+            std::vector<Token> tokens = lexer.tokenize();
+            Parser parser(tokens);
+            auto ast = parser.parse();
+            
+            // Glushkov NFA construction
+            auto nfa = NFABuilder::build(ast.get(), regexIdx++);
+            if (nfa) {
+                nfas.push_back(std::move(nfa));
+            }
+        } catch (const std::exception& e) {
+            std::cerr << "Error processing regex '" << trimmedLine << "': " << e.what() << std::endl;
+        }
+    }
+
+    std::cout << "Successfully built " << nfas.size() << " NFAs." << std::endl;
+
+    // Optional Validation: NFA Simulation
+    if (!testStrings.empty()) {
+        std::cout << "\n--- NFA Simulation Results ---" << std::endl;
+        for (const auto& testStr : testStrings) {
+            std::cout << "String: \"" << testStr << "\"" << std::endl;
+            for (size_t i = 0; i < nfas.size(); ++i) {
+                bool matches = nfas[i]->simulate(testStr);
+                std::cout << "  Regex [" << i << "] (" << originalRegexes[i] << "): " 
+                          << (matches ? "MATCH" : "NO MATCH") << std::endl;
+            }
+            std::cout << std::endl;
+        }
+    }
+
+    // Future: Stage 3 — Verilog Emitter
+    // if (!nfas.empty()) {
+    //     Emitter emitter(nfas);
+    //     emitter.emit("output/");
+    // }
+
+    return 0;
+}
+</file>
+
+<file path="src/parser.cpp">
+#include "parser.h"
+#include <stdexcept>
+
+std::string nodeTypeToString(ASTNodeType type) {
+    switch (type) {
+        case ASTNodeType::LITERAL:       return "LITERAL";
+        case ASTNodeType::DOT:           return "DOT";
+        case ASTNodeType::CONCATENATION: return "CONCATENATION";
+        case ASTNodeType::UNION:         return "UNION";
+        case ASTNodeType::STAR:          return "STAR";
+        case ASTNodeType::PLUS:          return "PLUS";
+        case ASTNodeType::OPTIONAL:      return "OPTIONAL";
+        default:                         return "UNKNOWN";
+    }
+}
+
+Parser::Parser(const std::vector<Token>& tokens) : tokens(tokens), pos(0) {}
+
+std::unique_ptr<ASTNode> Parser::parse() {
+    auto root = parseExpression();
+    if (!isAtEnd() && peek().type != TokenType::END_OF_INPUT) {
+        error("Unexpected token at end of expression: " + tokenTypeToString(peek().type));
+    }
+    return root;
+}
+
+// Expression -> Term ( '|' Term )*
+std::unique_ptr<ASTNode> Parser::parseExpression() {
+    if (check(TokenType::PIPE)) {
+        error("Empty alternation branch (missing left side)");
+    }
+    auto left = parseTerm();
+
+    while (match(TokenType::PIPE)) {
+        if (isAtEnd() || peek().type == TokenType::RPAREN || peek().type == TokenType::PIPE || peek().type == TokenType::END_OF_INPUT) {
+            error("Empty alternation branch");
+        }
+        auto right = parseTerm();
+        left = std::make_unique<UnionNode>(std::move(left), std::move(right));
+    }
+
+    return left;
+}
+
+// Term -> Factor+
+std::unique_ptr<ASTNode> Parser::parseTerm() {
+    auto node = parseFactor();
+
+    while (!isAtEnd() && 
+           peek().type != TokenType::PIPE && 
+           peek().type != TokenType::RPAREN && 
+           peek().type != TokenType::END_OF_INPUT) {
+        auto next = parseFactor();
+        node = std::make_unique<ConcatenationNode>(std::move(node), std::move(next));
+    }
+
+    return node;
+}
+
+// Factor -> Atom ( '*' | '+' | '?' )?
+std::unique_ptr<ASTNode> Parser::parseFactor() {
+    auto node = parseAtom();
+
+    if (match(TokenType::STAR)) {
+        node = std::make_unique<StarNode>(std::move(node));
+    } else if (match(TokenType::PLUS)) {
+        node = std::make_unique<PlusNode>(std::move(node));
+    } else if (match(TokenType::QUESTION)) {
+        node = std::make_unique<OptionalNode>(std::move(node));
+    }
+
+    return node;
+}
+
+// Atom -> LITERAL | DOT | '(' Expression ')'
+std::unique_ptr<ASTNode> Parser::parseAtom() {
+    if (match(TokenType::LITERAL)) {
+        return std::make_unique<LiteralNode>(tokens[pos - 1].value);
+    }
+
+    if (match(TokenType::DOT)) {
+        return std::make_unique<DotNode>();
+    }
+
+    if (match(TokenType::LPAREN)) {
+        auto node = parseExpression();
+        if (!match(TokenType::RPAREN)) {
+            error("Unmatched parenthesis: expected ')'");
+        }
+        return node;
+    }
+
+    if (peek().type == TokenType::STAR || peek().type == TokenType::PLUS || peek().type == TokenType::QUESTION) {
+        error("Quantifier '" + tokenTypeToString(peek().type) + "' applied to nothing");
+    }
+
+    error("Unexpected token: " + tokenTypeToString(peek().type));
+    return nullptr; // Should not reach here
+}
+
+const Token& Parser::peek() const {
+    return tokens[pos];
+}
+
+const Token& Parser::advance() {
+    if (!isAtEnd()) pos++;
+    return tokens[pos - 1];
+}
+
+bool Parser::match(TokenType type) {
+    if (check(type)) {
+        advance();
+        return true;
+    }
+    return false;
+}
+
+bool Parser::check(TokenType type) const {
+    if (isAtEnd()) return false;
+    return peek().type == type;
+}
+
+bool Parser::isAtEnd() const {
+    return pos >= tokens.size() || tokens[pos].type == TokenType::END_OF_INPUT;
+}
+
+void Parser::error(const std::string& message) const {
+    const Token& t = peek();
+    throw std::runtime_error(message + " at line " + std::to_string(t.line) + ", column " + std::to_string(t.column));
+}
+</file>
+
+<file path="src/parser.h">
+#ifndef PARSER_H
+#define PARSER_H
+
+#include <memory>
+#include <vector>
+#include <set>
+#include "lexer.h"
+
+enum class ASTNodeType {
+    LITERAL,
+    DOT,
+    CONCATENATION,
+    UNION,
+    STAR,
+    PLUS,
+    OPTIONAL
+};
+
+class ASTNode {
+public:
+    ASTNodeType type;
+    virtual ~ASTNode() = default;
+
+    // The following fields are populated by the NFA builder (Stage 2), NOT the parser.
+    bool nullable = false;
+    std::set<int> firstpos;
+    std::set<int> lastpos;
+
+    explicit ASTNode(ASTNodeType t) : type(t) {}
+};
+
+std::string nodeTypeToString(ASTNodeType type);
+
+class LiteralNode : public ASTNode {
+public:
+    char value;
+    int position; // Used for Glushkov's construction
+    explicit LiteralNode(char v) : ASTNode(ASTNodeType::LITERAL), value(v), position(-1) {}
+};
+
+class DotNode : public ASTNode {
+public:
+    int position; // Used for Glushkov's construction
+    DotNode() : ASTNode(ASTNodeType::DOT), position(-1) {}
+};
+
+class ConcatenationNode : public ASTNode {
+public:
+    std::unique_ptr<ASTNode> left;
+    std::unique_ptr<ASTNode> right;
+    ConcatenationNode(std::unique_ptr<ASTNode> l, std::unique_ptr<ASTNode> r)
+        : ASTNode(ASTNodeType::CONCATENATION), left(std::move(l)), right(std::move(r)) {}
+};
+
+class UnionNode : public ASTNode {
+public:
+    std::unique_ptr<ASTNode> left;
+    std::unique_ptr<ASTNode> right;
+    UnionNode(std::unique_ptr<ASTNode> l, std::unique_ptr<ASTNode> r)
+        : ASTNode(ASTNodeType::UNION), left(std::move(l)), right(std::move(r)) {}
+};
+
+class StarNode : public ASTNode {
+public:
+    std::unique_ptr<ASTNode> inner;
+    explicit StarNode(std::unique_ptr<ASTNode> i)
+        : ASTNode(ASTNodeType::STAR), inner(std::move(i)) {}
+};
+
+class PlusNode : public ASTNode {
+public:
+    std::unique_ptr<ASTNode> inner;
+    explicit PlusNode(std::unique_ptr<ASTNode> i)
+        : ASTNode(ASTNodeType::PLUS), inner(std::move(i)) {}
+};
+
+class OptionalNode : public ASTNode {
+public:
+    std::unique_ptr<ASTNode> inner;
+    explicit OptionalNode(std::unique_ptr<ASTNode> i)
+        : ASTNode(ASTNodeType::OPTIONAL), inner(std::move(i)) {}
+};
+
+class Parser {
+public:
+    explicit Parser(const std::vector<Token>& tokens);
+    std::unique_ptr<ASTNode> parse();
+
+private:
+    const std::vector<Token>& tokens;
+    size_t pos;
+
+    std::unique_ptr<ASTNode> parseExpression();   // Union
+    std::unique_ptr<ASTNode> parseTerm();         // Concatenation
+    std::unique_ptr<ASTNode> parseFactor();       // Quantifiers
+    std::unique_ptr<ASTNode> parseAtom();         // Literals, Dot, Parens
+
+    const Token& peek() const;
+    const Token& advance();
+    bool match(TokenType type);
+    bool check(TokenType type) const;
+    bool isAtEnd() const;
+
+    void error(const std::string& message) const;
+};
+
+#endif // PARSER_H
+</file>
+
+<file path="README.md">
+# XIIRegexBuilder
+</file>
+
+<file path="usecase.md">
+# Why Hardware Regex Matching Matters
+
+## The Core Problem
+
+Modern financial markets generate enormous volumes of structured text — orders, quotes, news, and trade confirmations — all arriving as high-speed character streams. Firms need to filter, detect, and act on specific patterns within this data faster than any software stack can manage. Hardware regex matching on an FPGA puts that decision as close to the wire as physically possible.
+
+---
+
+## Key Use Cases in Quantitative Finance
+
+**FIX Protocol Parsing.** Every order, cancel, and fill in electronic trading is an ASCII FIX message. Filtering and validating millions of these per second in hardware means routing decisions are made before the message reaches software — shaving off critical microseconds.
+
+**Market Data Feed Filtering.** Exchanges blast full order book updates at millions of events per second. Running regex matches in hardware lets firms discard irrelevant instruments at line rate, so the CPU only processes what the strategy actually needs.
+
+**Tick Data Pattern Detection.** Price movement sequences — bid size spikes, spread collapses, momentum signals — can be encoded as regex patterns over a tokenised tick stream. Hardware detection latency is measured in nanoseconds, not microseconds.
+
+**News and Sentiment Feeds.** Scanning incoming Reuters or Bloomberg text for company names, earnings figures, or central bank language is a multi-regex problem. An FPGA can flag a relevant news item before the full message has even arrived.
+
+**Trade Surveillance and Compliance.** Patterns like spoofing, layering, and wash trading are detectable as sequences in live order flow. Hardware matching enables real-time compliance checks on the live feed rather than retrospective analysis on stored logs.
+
+---
+
+## Why FPGA and Not Just Faster Software?
+
+The fundamental advantage is parallelism. A software engine checks N regexes sequentially — throughput degrades linearly as N grows. An FPGA runs all N FSMs in the same clock cycle, so throughput is flat regardless of how many patterns are active. At scale, no amount of SIMD optimisation closes that gap.
+
+The second advantage is determinism. Software latency varies with cache state, OS scheduling, and branching behaviour. Hardware latency is a fixed number of clock cycles, every time — essential when a one-microsecond edge translates directly into profit.
+
+---
+
+## The Bottom Line
+
+In quantitative finance, the matching decision needs to happen before any further processing, on a continuous high-speed stream, against many patterns simultaneously, with the lowest and most predictable latency possible. That is precisely the problem this system is designed to solve.
+</file>
+
+<file path="inputs/regexes.txt">
+# Sample Regex Input File
+# One regex per line
+
+# Match 'a' or 'b'
+a|b
+
+# Match 'a' followed by zero or more 'b's, then 'c'
+ab*c
+
+# Match one or more 'a' or 'b', then optionally 'c'
+(a|b)+c?
+
+# Match 'a', then any character, then 'b'
+a.b
+
+# Match literal 'abc'
+abc
+
+# Match complex nested expression
+(a|b)*c(d|e)+
+</file>
+
+<file path="inputs/test_strings.txt">
+# Test Strings
+# Each line is a test string
+a
+b
+c
+aa
+ab
+ac
+abc
+abbc
+abbbc
+aaaa
+bbbb
+x
+axb
+ayb
+(a|b)
+abc
+abcd
+abce
+</file>
+
+<file path="src/nfa.cpp">
+#include "nfa.h"
+#include <iostream>
+#include <algorithm>
+
+// Start at -1 so the first ++globalStateCounter gives 0.
+int NFABuilder::globalStateCounter = -1;
+
+void NFA::addState(int id, bool isAccept) {
+    states.emplace(id, NFAState(id, isAccept));
+}
+
+void NFA::addTransition(int fromId, unsigned char c, int toId) {
+    states.at(fromId).transitions[c].insert(toId);
+}
+
+bool NFA::simulate(const std::string& input) const {
+    std::set<int> activeStates = {startStateId};
+    
+    for (unsigned char c : input) {
+        std::set<int> nextStates;
+        for (int stateId : activeStates) {
+            auto& state = states.at(stateId);
+            if (state.transitions.count(c)) {
+                for (int nextId : state.transitions.at(c)) {
+                    nextStates.insert(nextId);
+                }
+            }
+        }
+        activeStates = nextStates;
+        if (activeStates.empty()) return false;
+    }
+    
+    for (int stateId : activeStates) {
+        if (states.at(stateId).isAccept) return true;
+    }
+    return false;
+}
+
+std::unique_ptr<NFA> NFABuilder::build(ASTNode* root, int regexIdx) {
+    if (!root) return nullptr;
+
+    auto nfa = std::make_unique<NFA>(regexIdx);
+    
+    // 1. Linearization (assign positions to symbols)
+    int localPosCounter = 1;
+    std::map<int, unsigned char> posToChar;
+    std::set<int> dotPositions;
+    linearize(root, localPosCounter, posToChar, dotPositions);
+    int numPositions = localPosCounter - 1;
+
+    // 2. Compute nullable, firstpos, lastpos
+    computeNullableFirstLast(root);
+
+    // 3. Compute followpos
+    std::map<int, std::set<int>> followpos;
+    for (int i = 1; i <= numPositions; ++i) {
+        followpos[i] = std::set<int>();
+    }
+    computeFollowpos(root, followpos);
+
+    // 4. Build NFA states and transitions
+    // Glushkov states: 0 (initial) + 1..n
+    // We map these to global IDs. 
+    // Invariant: after each build(), globalStateCounter equals the highest global ID used.
+    
+    int startGlobalId = ++globalStateCounter;
+    nfa->startStateId = startGlobalId;
+    std::map<int, int> localToGlobal;
+    localToGlobal[0] = startGlobalId;
+    nfa->addState(startGlobalId, root->nullable);
+
+    for (int i = 1; i <= numPositions; ++i) {
+        localToGlobal[i] = ++globalStateCounter;
+        bool isAccept = (root->lastpos.find(i) != root->lastpos.end());
+        nfa->addState(localToGlobal[i], isAccept);
+    }
+
+    // Transitions from state 0
+    for (int p : root->firstpos) {
+        if (dotPositions.find(p) != dotPositions.end()) { // DOT
+            for (int val = 32; val <= 126; ++val) {
+                nfa->addTransition(localToGlobal[0], static_cast<unsigned char>(val), localToGlobal[p]);
+            }
+        } else {
+            unsigned char c = posToChar[p];
+            nfa->addTransition(localToGlobal[0], c, localToGlobal[p]);
+        }
+    }
+
+    // Transitions from state p > 0
+    for (int p = 1; p <= numPositions; ++p) {
+        for (int q : followpos[p]) {
+            if (dotPositions.find(q) != dotPositions.end()) { // DOT
+                for (int val = 32; val <= 126; ++val) {
+                    nfa->addTransition(localToGlobal[p], static_cast<unsigned char>(val), localToGlobal[q]);
+                }
+            } else {
+                unsigned char c = posToChar[q];
+                nfa->addTransition(localToGlobal[p], c, localToGlobal[q]);
+            }
+        }
+    }
+
+    return nfa;
+}
+
+void NFABuilder::linearize(ASTNode* node, int& posCounter, std::map<int, unsigned char>& posToChar, std::set<int>& dotPositions) {
+    if (!node) return;
+    switch (node->type) {
+        case ASTNodeType::LITERAL: {
+            auto n = static_cast<LiteralNode*>(node);
+            n->position = posCounter++;
+            posToChar[n->position] = static_cast<unsigned char>(n->value);
+            break;
+        }
+        case ASTNodeType::DOT: {
+            auto n = static_cast<DotNode*>(node);
+            n->position = posCounter++;
+            dotPositions.insert(n->position);
+            break;
+        }
+        case ASTNodeType::CONCATENATION: {
+            auto n = static_cast<ConcatenationNode*>(node);
+            linearize(n->left.get(), posCounter, posToChar, dotPositions);
+            linearize(n->right.get(), posCounter, posToChar, dotPositions);
+            break;
+        }
+        case ASTNodeType::UNION: {
+            auto n = static_cast<UnionNode*>(node);
+            linearize(n->left.get(), posCounter, posToChar, dotPositions);
+            linearize(n->right.get(), posCounter, posToChar, dotPositions);
+            break;
+        }
+        case ASTNodeType::STAR: {
+            auto n = static_cast<StarNode*>(node);
+            linearize(n->inner.get(), posCounter, posToChar, dotPositions);
+            break;
+        }
+        case ASTNodeType::PLUS: {
+            auto n = static_cast<PlusNode*>(node);
+            linearize(n->inner.get(), posCounter, posToChar, dotPositions);
+            break;
+        }
+        case ASTNodeType::OPTIONAL: {
+            auto n = static_cast<OptionalNode*>(node);
+            linearize(n->inner.get(), posCounter, posToChar, dotPositions);
+            break;
+        }
+    }
+}
+
+void NFABuilder::computeNullableFirstLast(ASTNode* node) {
+    if (!node) return;
+    switch (node->type) {
+        case ASTNodeType::LITERAL: {
+            auto n = static_cast<LiteralNode*>(node);
+            n->nullable = false;
+            n->firstpos = {n->position};
+            n->lastpos = {n->position};
+            break;
+        }
+        case ASTNodeType::DOT: {
+            auto n = static_cast<DotNode*>(node);
+            n->nullable = false;
+            n->firstpos = {n->position};
+            n->lastpos = {n->position};
+            break;
+        }
+        case ASTNodeType::CONCATENATION: {
+            auto n = static_cast<ConcatenationNode*>(node);
+            computeNullableFirstLast(n->left.get());
+            computeNullableFirstLast(n->right.get());
+            n->nullable = n->left->nullable && n->right->nullable;
+            
+            n->firstpos = n->left->firstpos;
+            if (n->left->nullable) {
+                n->firstpos.insert(n->right->firstpos.begin(), n->right->firstpos.end());
+            }
+            
+            n->lastpos = n->right->lastpos;
+            if (n->right->nullable) {
+                n->lastpos.insert(n->left->lastpos.begin(), n->left->lastpos.end());
+            }
+            break;
+        }
+        case ASTNodeType::UNION: {
+            auto n = static_cast<UnionNode*>(node);
+            computeNullableFirstLast(n->left.get());
+            computeNullableFirstLast(n->right.get());
+            n->nullable = n->left->nullable || n->right->nullable;
+            
+            n->firstpos = n->left->firstpos;
+            n->firstpos.insert(n->right->firstpos.begin(), n->right->firstpos.end());
+            
+            n->lastpos = n->left->lastpos;
+            n->lastpos.insert(n->right->lastpos.begin(), n->right->lastpos.end());
+            break;
+        }
+        case ASTNodeType::STAR: {
+            auto n = static_cast<StarNode*>(node);
+            computeNullableFirstLast(n->inner.get());
+            n->nullable = true;
+            n->firstpos = n->inner->firstpos;
+            n->lastpos = n->inner->lastpos;
+            break;
+        }
+        case ASTNodeType::PLUS: {
+            auto n = static_cast<PlusNode*>(node);
+            computeNullableFirstLast(n->inner.get());
+            n->nullable = n->inner->nullable;
+            n->firstpos = n->inner->firstpos;
+            n->lastpos = n->inner->lastpos;
+            break;
+        }
+        case ASTNodeType::OPTIONAL: {
+            auto n = static_cast<OptionalNode*>(node);
+            computeNullableFirstLast(n->inner.get());
+            n->nullable = true;
+            n->firstpos = n->inner->firstpos;
+            n->lastpos = n->inner->lastpos;
+            break;
+        }
+    }
+}
+
+void NFABuilder::computeFollowpos(ASTNode* node, std::map<int, std::set<int>>& followpos) {
+    if (!node) return;
+    switch (node->type) {
+        case ASTNodeType::CONCATENATION: {
+            auto n = static_cast<ConcatenationNode*>(node);
+            computeFollowpos(n->left.get(), followpos);
+            computeFollowpos(n->right.get(), followpos);
+            for (int p : n->left->lastpos) {
+                followpos[p].insert(n->right->firstpos.begin(), n->right->firstpos.end());
+            }
+            break;
+        }
+        case ASTNodeType::STAR: {
+            auto n = static_cast<StarNode*>(node);
+            computeFollowpos(n->inner.get(), followpos);
+            for (int p : n->inner->lastpos) {
+                followpos[p].insert(n->inner->firstpos.begin(), n->inner->firstpos.end());
+            }
+            break;
+        }
+        case ASTNodeType::PLUS: {
+            auto n = static_cast<PlusNode*>(node);
+            computeFollowpos(n->inner.get(), followpos);
+            for (int p : n->inner->lastpos) {
+                followpos[p].insert(n->inner->firstpos.begin(), n->inner->firstpos.end());
+            }
+            break;
+        }
+        case ASTNodeType::UNION: {
+            auto n = static_cast<UnionNode*>(node);
+            computeFollowpos(n->left.get(), followpos);
+            computeFollowpos(n->right.get(), followpos);
+            break;
+        }
+        case ASTNodeType::OPTIONAL: {
+            auto n = static_cast<OptionalNode*>(node);
+            computeFollowpos(n->inner.get(), followpos);
+            break;
+        }
+        default: break;
+    }
+}
+</file>
+
+<file path="src/nfa.h">
+#ifndef NFA_H
+#define NFA_H
+
+#include <vector>
+#include <set>
+#include <map>
+#include <memory>
+#include "parser.h"
+
+struct NFAState {
+    int id;
+    bool isAccept;
+    // Map from character to set of destination state IDs
+    std::map<unsigned char, std::set<int>> transitions;
+
+    explicit NFAState(int id, bool isAccept = false) : id(id), isAccept(isAccept) {}
+};
+
+class NFA {
+public:
+    int regexIndex;
+    int startStateId;
+    std::map<int, NFAState> states;
+
+    explicit NFA(int idx) : regexIndex(idx), startStateId(-1) {}
+    void addState(int id, bool isAccept = false);
+    void addTransition(int fromId, unsigned char c, int toId);
+    bool simulate(const std::string& input) const;
+};
+
+class NFABuilder {
+public:
+    // Global state counter to ensure unique IDs across all NFAs
+    static int globalStateCounter;
+
+    static std::unique_ptr<NFA> build(ASTNode* root, int regexIdx);
+
+private:
+    static void linearize(ASTNode* node, int& posCounter, std::map<int, unsigned char>& posToChar, std::set<int>& dotPositions);
+    static void computeNullableFirstLast(ASTNode* node);
+    static void computeFollowpos(ASTNode* node, std::map<int, std::set<int>>& followpos);
+};
+
+#endif // NFA_H
+</file>
+
+<file path="src/golden.cpp">
+#include <iostream>
+#include <fstream>
+#include <string>
+#include <vector>
+#include <regex>
+#include <iomanip>
+#include <algorithm>
+
+std::string trim(const std::string& str) {
+    size_t first = str.find_first_not_of(" \t\r\n");
+    if (first == std::string::npos) return "";
+    size_t last = str.find_last_not_of(" \t\r\n");
+    return str.substr(first, (last - first + 1));
+}
+
+int main(int argc, char* argv[]) {
+    if (argc < 3) {
+        std::cerr << "Usage: " << argv[0] << " <regex_file> <test_strings_file> [output_file]" << std::endl;
+        return 1;
+    }
+
+    std::string regexFilename = argv[1];
+    std::string testFilename = argv[2];
+    std::string outputFilename = (argc > 3) ? argv[3] : "expected_matches.txt";
+
+    std::ifstream regexFile(regexFilename);
+    if (!regexFile.is_open()) {
+        std::cerr << "Failed to open " << regexFilename << std::endl;
+        return 1;
+    }
+
+    std::vector<std::string> regexes;
+    std::string line;
+    while (std::getline(regexFile, line)) {
+        std::string trimmed = trim(line);
+        if (trimmed.empty() || trimmed[0] == '#') continue;
+        regexes.push_back(trimmed);
+    }
+    regexFile.close();
+
+    std::ifstream testFile(testFilename);
+    if (!testFile.is_open()) {
+        std::cerr << "Failed to open " << testFilename << std::endl;
+        return 1;
+    }
+
+    std::vector<std::string> testStrings;
+    while (std::getline(testFile, line)) {
+        // Remove trailing \r\n
+        size_t last = line.find_last_not_of("\r\n");
+        std::string s = (last != std::string::npos) ? line.substr(0, last + 1) : (line.empty() ? "" : line);
+        
+        // Skip comments and blank lines if desired, but spec says "Each line is one test string"
+        // Let's at least skip the comment headers if they start with #
+        if (!s.empty() && s[0] == '#') continue;
+        if (s.empty()) {
+            // Check if it's truly a blank line (might be intentional empty string test)
+            // For safety, let's only skip if the raw line was empty or just whitespace
+            if (trim(line).empty()) continue;
+        }
+
+        testStrings.push_back(s);
+    }
+    testFile.close();
+
+    std::ofstream outFile(outputFilename);
+    if (!outFile.is_open()) {
+        std::cerr << "Failed to open " << outputFilename << " for writing." << std::endl;
+        return 1;
+    }
+
+    for (const auto& testStr : testStrings) {
+        std::string mask = "";
+        for (size_t i = 0; i < regexes.size(); ++i) {
+            bool matches = false;
+            try {
+                // std::regex_match does full match.
+                std::regex re(regexes[i]);
+                matches = std::regex_match(testStr, re);
+            } catch (const std::regex_error& e) {
+                // Ignore syntax mismatch
+            }
+            mask += (matches ? "1" : "0");
+        }
+        // Reverse mask so bit 0 is on the right (Verilog convention)
+        std::reverse(mask.begin(), mask.end());
+        outFile << mask << "\n";
+    }
+    outFile.close();
+
+    std::cout << "Golden reference generated: " << outputFilename << " (" << testStrings.size() << " test cases)" << std::endl;
+
+    return 0;
+}
+</file>
+
+<file path=".gitignore">
+# Prerequisites
+*.d
+
+# Compiled Object files
+*.slo
+*.lo
+*.o
+*.obj
+
+# Precompiled Headers
+*.gch
+*.pch
+
+# Linker files
+*.ilk
+
+# Debugger Files
+*.pdb
+
+# Compiled Dynamic libraries
+*.so
+*.dylib
+*.dll
+
+# Fortran module files
+*.mod
+*.smod
+
+# Compiled Static libraries
+*.lai
+*.la
+*.a
+*.lib
+
+# Executables
+*.exe
+*.out
+*.app
+
+# debug information files
+*.dwo
+output/
+
+# final executable
+build/
+</file>
+
+<file path="Specifications.md">
+# Regex → NFA → Verilog Hardware Matcher
+## Project Specification
+
+---
+
+## 1. Project Overview
+
+This project implements a hardware-accelerated regular expression matching pipeline. A set of regular expressions defined in plain text is automatically compiled into parallel hardware finite state machines (FSMs), expressed in Verilog, and synthesised onto an FPGA. At runtime, a stream of ASCII characters is fed into the hardware one character per clock cycle, and the system reports which regular expressions are matched by the full input string.
+
+The pipeline consists of four major stages: regex parsing, NFA construction, Verilog code generation, and hardware simulation and synthesis.
+
+---
+
+## 2. Finalised Design Decisions
+
+| Decision | Choice |
+|---|---|
+| Supported operators | Kleene star, plus, optional, union, dot, parentheses, literals |
+| NFA construction algorithm | Glushkov's construction |
+| Architecture | One independent Verilog FSM module per NFA, all running in parallel |
+| ε-transition handling | None — Glushkov's construction produces ε-free NFAs directly |
+| State encoding | One-hot (one flip-flop per NFA state) |
+| Character stream interface | Synchronous; one 8-bit ASCII character per clock cycle |
+| Match semantics | Full match only (the entire input string must satisfy the regex) |
+| Scale | Fewer than 20 regular expressions |
+| Simulation and synthesis tool | Xilinx Vivado |
+
+---
+
+## 3. Input Specification
+
+### 3.1 Regex Input File
+
+The input is a plain text file, referred to throughout as `regexes.txt`. It obeys the following rules:
+
+- One regular expression per line.
+- Lines beginning with the `#` character are treated as comments and ignored.
+- Blank lines are ignored.
+- Each non-comment, non-blank line is assigned a zero-based index that becomes the index of the corresponding NFA and Verilog module.
+
+### 3.2 Supported Regex Syntax
+
+The following constructs must be supported:
+
+- **Literal characters** — any printable ASCII character (codes 32–126) that is not a metacharacter is matched literally.
+- **Dot** (`.`) — matches any single character.
+- **Kleene star** (`*`) — matches zero or more repetitions of the preceding atom.
+- **Plus** (`+`) — matches one or more repetitions of the preceding atom.
+- **Optional** (`?`) — matches zero or one occurrence of the preceding atom.
+- **Union** (`|`) — matches either the expression on the left or the expression on the right. Union may appear both within a single regex (e.g. between subexpressions) and effectively between entire regex lines via the separate-line structure.
+- **Parentheses** (`(` and `)`) — group subexpressions and control the scope of operators.
+
+The operator precedence from highest to lowest is: `*`, `+`, `?` (postfix quantifiers) → concatenation (implicit) → `|` (union).
+
+Anchors (`^` and `$`) are not supported. Full-match semantics are enforced by the hardware control signals rather than by the regex syntax.
+
+### 3.3 Test String Input File
+
+A second plain text input file provides strings to test against the regex set. Each line is one test string. The test strings are used to drive the hardware simulation testbench and to generate golden reference output.
+
+---
+
+## 4. Stage 1 — C++ Regex Parser
+
+### 4.1 Lexer
+
+The lexer reads a regex string character by character and produces a flat sequence of typed tokens. The token types are: literal character, dot, star, plus, question mark, pipe (union), left parenthesis, and right parenthesis.
+
+### 4.2 Parser
+
+The parser consumes the token stream produced by the lexer and constructs an Abstract Syntax Tree (AST). The parser uses recursive descent and enforces the correct operator precedence. The grammar it implements, informally stated, is:
+
+- An expression is one or more concatenated terms separated by `|`.
+- A term is one or more concatenated factors.
+- A factor is an atom optionally followed by one quantifier (`*`, `+`, or `?`).
+- An atom is either a literal, a dot, or a parenthesised expression.
+
+Each AST node is one of the following types: Literal, Dot, Concatenation, Union, Star, Plus, Optional.
+
+### 4.3 Error Handling
+
+The parser must detect and report, with a meaningful message and line number:
+
+- Unmatched parentheses.
+- A quantifier applied to nothing (e.g. a leading `*`).
+- An empty alternation branch (e.g. `a|`).
+- Any character outside the printable ASCII range.
+
+---
+
+## 5. Stage 2 — C++ NFA Construction (Glushkov's Construction)
+
+### 5.1 Overview
+
+Glushkov's construction is applied to each AST to produce an ε-free NFA. Unlike Thompson's construction, Glushkov's algorithm never introduces ε-transitions. Instead, it works by analysing the positions of symbol occurrences within the regex and computing which positions can follow which others during a match. The resulting NFA has exactly one state per symbol occurrence in the regex, plus one distinguished initial state, and all transitions are labelled with concrete characters.
+
+This ε-free property means the Verilog emitter requires no combinational ε-closure layer — the next-state logic is entirely registered, which simplifies synthesis and removes combinational depth as a timing concern.
+
+### 5.2 Step 1 — Linearisation
+
+Each symbol occurrence in the regex (every literal character and every dot) is assigned a unique integer position label, numbered from 1 upwards, in left-to-right order of appearance. Position 0 is reserved for the special initial state and does not correspond to any symbol. Two occurrences of the same character are treated as distinct positions.
+
+For example, the regex `ab*a` is linearised as `a₁ b₂* a₃`, yielding positions 1, 2, and 3.
+
+### 5.3 Step 2 — Computing Nullable
+
+For each node in the AST, a Boolean property `nullable` is computed, indicating whether the sub-expression rooted at that node can match the empty string. The rules are:
+
+- A Literal or Dot node is never nullable.
+- A Star or Optional node is always nullable.
+- A Plus node is nullable if and only if its inner sub-expression is nullable.
+- A Union node is nullable if either branch is nullable.
+- A Concatenation node is nullable if and only if both sub-expressions are nullable.
+
+### 5.4 Step 3 — Computing Firstpos
+
+For each AST node, `firstpos` is the set of positions that can match the first character of any string accepted by that sub-expression. The rules are:
+
+- A Literal or Dot node at position p has `firstpos = {p}`.
+- A Star, Plus, or Optional node has the same `firstpos` as its inner sub-expression.
+- A Union node has `firstpos` equal to the union of the `firstpos` sets of both branches.
+- A Concatenation node of left and right sub-expressions has `firstpos` equal to the `firstpos` of the left sub-expression, plus the `firstpos` of the right sub-expression if the left sub-expression is nullable.
+
+### 5.5 Step 4 — Computing Lastpos
+
+For each AST node, `lastpos` is the set of positions that can match the last character of any string accepted by that sub-expression. The rules are:
+
+- A Literal or Dot node at position p has `lastpos = {p}`.
+- A Star, Plus, or Optional node has the same `lastpos` as its inner sub-expression.
+- A Union node has `lastpos` equal to the union of the `lastpos` sets of both branches.
+- A Concatenation node of left and right sub-expressions has `lastpos` equal to the `lastpos` of the right sub-expression, plus the `lastpos` of the left sub-expression if the right sub-expression is nullable.
+
+### 5.6 Step 5 — Computing Followpos
+
+For each position p, `followpos(p)` is the set of positions that can immediately follow position p in any match. This set is built by traversing the AST and applying two rules:
+
+- **Concatenation rule:** for every position p in `lastpos` of the left sub-expression of a Concatenation node, add all positions in `firstpos` of the right sub-expression to `followpos(p)`.
+- **Star and Plus rule:** for every position p in `lastpos` of the inner sub-expression of a Star or Plus node, add all positions in `firstpos` of that same inner sub-expression to `followpos(p)`.
+
+All other node types (Union, Optional, Literal, Dot) do not contribute to `followpos` directly.
+
+### 5.7 Step 6 — Building the NFA
+
+With the position functions computed, the NFA is assembled as follows:
+
+- **States:** one state for each position 1 through n (where n is the total number of symbol occurrences), plus state 0 as the initial state.
+- **Start state:** state 0.
+- **Accept states:** all positions in `lastpos` of the root AST node. Additionally, state 0 is an accept state if the root node is nullable (i.e. the regex matches the empty string).
+- **Transitions from state 0:** for each position p in `firstpos` of the root node, add a transition from state 0 on the symbol at position p to state p.
+- **Transitions from state p (p > 0):** for each position q in `followpos(p)`, add a transition from state p on the symbol at position q to state q.
+
+Because dot (`.`) matches any character, transitions labelled with a dot position are expanded to one transition arc per possible input character (all 256 byte values).
+
+### 5.8 NFA Representation
+
+Each NFA is described by a set of numbered states. Each state carries: a unique integer identifier, a Boolean flag indicating whether it is an accept state, and a map from input characters to sets of destination states. There are no ε-transitions. The total number of states for a given regex is exactly equal to the number of symbol occurrences plus one.
+
+### 5.9 Global State Numbering
+
+All NFA states across all N NFAs share a single global numbering space. This avoids identifier collisions when multiple NFAs are emitted into a single Vivado project.
+
+---
+
+## 6. Stage 3 — C++ Verilog Emitter
+
+### 6.1 Overview
+
+The emitter walks each NFA and produces a self-contained Verilog module. It also produces a top-level wrapper module and a simulation testbench. All output files are written to the `output/` directory.
+
+Because Glushkov's construction produces ε-free NFAs, the emitter requires no combinational ε-closure logic. Every transition is labelled with a concrete character, and the next-state logic is a straightforward combinational decode of `char_in` gated by the currently active states. This results in clean, purely registered FSMs with no combinational feedback paths.
+
+### 6.2 Per-NFA Module Interface
+
+Each NFA produces one Verilog module. The module's ports are:
+
+- `clk` — clock input.
+- `rst` — synchronous active-high reset.
+- `start` — a one-cycle pulse that initialises the FSM to its start state, beginning a new match attempt.
+- `end_of_str` — a one-cycle pulse asserted one cycle after the final character of the input string.
+- `char_in` — an 8-bit input carrying the current ASCII character.
+- `match` — a registered output that is asserted for one cycle when the FSM is in an accept state at the moment `end_of_str` is asserted.
+
+### 6.3 One-Hot State Encoding
+
+The state register inside each module is one-hot: there is one flip-flop per NFA state. A bit being set means that NFA state is currently active. Because the NFA is non-deterministic, multiple bits may be set simultaneously, faithfully representing the parallel set of active NFA states.
+
+On reset or on the `start` pulse, the state register is cleared and only the bit corresponding to state 0 (the initial state) is set.
+
+### 6.4 Next-State Logic
+
+The next-state logic is purely combinational and free of any ε-closure computation. For each state j, its next-state bit is asserted if any currently active state i has a transition to j on the current value of `char_in`. The resulting next-state vector is registered on the rising clock edge.
+
+### 6.5 Match Output Logic
+
+The `match` output is registered. It is asserted on the cycle following the cycle on which `end_of_str` is asserted, provided that at least one accept-state bit is active in the state register at the time `end_of_str` is seen. This ensures correct matching for both non-empty and empty strings (if the regex is nullable).
+
+### 6.6 Top-Level Wrapper Module
+
+A single top-level Verilog module instantiates all N NFA modules. All instances share the same `clk`, `rst`, `start`, `end_of_str`, and `char_in` signals. Each instance drives one bit of an N-bit `match` output bus, where bit k corresponds to NFA k.
+
+### 6.7 Emitter Output Files
+
+| File | Contents |
+|---|---|
+| `nfa_0.v` … `nfa_N.v` | One self-contained FSM module per regex |
+| `top.v` | Top-level wrapper instantiating all NFA modules |
+| `tb_top.v` | Simulation testbench |
+| `expected_matches.txt` | Golden reference output for validation |
+
+---
+
+## 7. Stage 4 — Simulation Testbench
+
+### 7.1 Structure
+
+The testbench instantiates `top` and drives all its inputs. It operates as follows for each test string:
+
+1. Assert `rst` for a fixed number of cycles to initialise all FSMs.
+2. Assert `start` for one cycle.
+3. Drive `char_in` with successive characters of the test string, one per clock cycle.
+4. On the cycle following the last character, assert `end_of_str` for one cycle.
+5. Sample `match` on the following cycle and compare it against the expected bitmask from the golden reference.
+6. Print a PASS or FAIL message for each test case, including the test string and the observed versus expected match bitmasks.
+
+### 7.2 Waveform Dump
+
+The testbench dumps all signals to a VCD file for inspection in Vivado's waveform viewer.
+
+### 7.3 Timing Assumptions
+
+- The clock period is fixed at 10 ns.
+- `char_in` is stable before the rising clock edge.
+- All control signals (`start`, `end_of_str`) are synchronous and held for exactly one cycle.
+
+---
+
+## 8. Stage 5 — Golden Reference
+
+A separate C++ program reads `regexes.txt` and `test_strings.txt`, runs each test string against each regex using the C++ standard library's full-match mode, and writes `expected_matches.txt`. Each line of the output corresponds to one test string and contains a bitmask (or equivalent structured text) indicating which regexes matched.
+
+This output is consumed by the testbench generator and used during simulation to validate the Verilog results.
+
+---
+
+## 9. Build System and Project Structure
+
+### 9.1 Directory Layout
+
+```
+project/
+├── regexes.txt
+├── test_strings.txt
+│
+├── src/
+│   ├── main.cpp
+│   ├── lexer.h / lexer.cpp
+│   ├── parser.h / parser.cpp
+│   ├── nfa.h / nfa.cpp
+│   └── emitter.h / emitter.cpp
+│
+├── golden/
+│   └── golden.cpp
+│
+└── output/
+    ├── nfa_0.v … nfa_N.v
+    ├── top.v
+    ├── tb_top.v
+    └── expected_matches.txt
+```
+
+### 9.2 Build and Run Order
+
+The pipeline is executed in the following sequence:
+
+1. Compile and run the C++ frontend on `regexes.txt` to produce all Verilog files and `expected_matches.txt`.
+2. Compile and run the golden reference binary on `regexes.txt` and `test_strings.txt` to produce or verify `expected_matches.txt`.
+3. Import all Verilog files into a Xilinx Vivado project.
+4. Run behavioural simulation; confirm all test cases report PASS.
+5. Run synthesis and implementation targeting the chosen FPGA part.
+6. Review timing and resource utilisation reports.
+
+---
+
+## 10. Validation Strategy
+
+### 10.1 Unit Testing the C++ Frontend
+
+Each C++ component is tested independently before integration:
+
+- The lexer is verified against a set of regex strings by inspecting the token stream it produces.
+- The parser is verified by comparing its AST output against hand-drawn trees for representative regexes.
+- The NFA builder is verified by checking, for representative regexes, that the linearisation is correct, that the firstpos, lastpos, and followpos sets match hand-computed values, and that the resulting state and transition counts equal the number of symbol occurrences plus one.
+- The emitter is verified by compiling its output in Vivado and confirming the modules are syntax-valid.
+
+### 10.2 Simulation Validation
+
+Every test case in the testbench must produce a match bitmask identical to the golden reference output. Any discrepancy is a bug in the NFA construction logic or the emitter.
+
+### 10.3 Synthesis Validation
+
+After synthesis and implementation, the following are checked:
+
+- No combinational loops reported by Vivado (expected to be clean given the ε-free NFA structure).
+- Timing closure achieved at the target clock frequency (10 ns period).
+- One-hot encoding inferred correctly for all state registers (confirmed via synthesis log).
+- Resource utilisation (LUT and FF count) scales reasonably with the number of symbol occurrences in the regex set.
+
+---
+
+## 11. Known Design Constraints and Risks
+
+### 11.1 One-Hot State Register Size
+
+One-hot encoding allocates one flip-flop per NFA state. Glushkov's construction produces exactly one state per symbol occurrence plus one initial state — generally fewer states than Thompson's construction for the same regex. With fewer than 20 regexes and relatively simple patterns this is not expected to be problematic, but unusually long or repetitive regexes should be monitored for excessive flip-flop usage.
+
+### 11.2 Dot Operator Fan-Out
+
+The dot operator (`.`) matches any of the 256 possible byte values. Each dot position in the NFA produces transition arcs to its followpos targets for all 256 input characters. Heavy use of dot in patterns will increase LUT usage in the next-state logic accordingly.
+
+### 11.3 Full Match Only
+
+The system performs full-match checking only. Substring search is not supported. Any future extension to substring matching would require changes to how the `start` signal is managed, specifically recycling the FSM from state 0 on every input character.
+
+### 11.4 Shared Symbol Positions Across Regexes
+
+Because all N NFAs share a global state numbering space, the emitter must ensure that position labels assigned during linearisation of one regex do not collide with those of another. This is managed by maintaining a running position counter across all regexes during the construction phase.
+
+---
+
+## 12. Out of Scope
+
+The following are explicitly not part of this project:
+
+- Character classes (`[a-z]`, `[^abc]`, etc.)
+- Anchors (`^` and `$`)
+- Backreferences or capture groups
+- Unicode support (ASCII only)
+- Intersection of regular languages
+- Substring or multi-match modes
+- AXI-Stream or other bus-protocol interfaces
+- Formal verification
+- A graphical front-end or interactive tooling
+</file>
+
+<file path="src/emitter.cpp">
+#include "emitter.h"
+#include <fstream>
+#include <iostream>
+#include <iomanip>
+#include <sstream>
+#include <algorithm>
+#include <set>
+#include <map>
+#include <system_error>
+#include <filesystem>
+
+void Emitter::emit(const std::vector<std::unique_ptr<NFA>>& nfas,
+                   const std::string& outputDirStr, 
+                   const std::vector<std::string>& testStrings, 
+                   const std::vector<std::string>& expectedMatches) {
+    if (nfas.empty()) {
+        std::cout << "No valid NFAs were provided; skipping Verilog emission." << std::endl;
+        return;
+    }
+
+    std::filesystem::path outputDir(outputDirStr);
+    try {
+        std::filesystem::create_directories(outputDir);
+    } catch (const std::filesystem::filesystem_error& e) {
+        throw std::system_error(e.code(), "Failed to create output directory: " + outputDir.string());
+    }
+
+    for (const auto& nfa : nfas) {
+        emitNFAModule(*nfa, outputDir);
+    }
+
+    emitTopModule(nfas, outputDir);
+    emitTestbench(nfas, outputDir, testStrings, expectedMatches);
+}
+
+void Emitter::emitNFAModule(const NFA& nfa, const std::filesystem::path& outputDir) {
+    auto filePath = outputDir / ("nfa_" + std::to_string(nfa.regexIndex) + ".v");
+    std::ofstream out;
+    out.exceptions(std::ofstream::failbit | std::ofstream::badbit);
+
+    try {
+        out.open(filePath);
+    } catch (const std::ios_base::failure& e) {
+        throw std::system_error(errno, std::generic_category(), "Could not open " + filePath.string() + " for writing");
+    }
+
+    int numStates = static_cast<int>(nfa.states.size());
+    if (numStates == 0) return; // Should not happen with valid NFAs
+
+    std::map<int, int> globalToLocal;
+    int localIdx = 0;
+    
+    // Ensure start state is always local state 0
+    globalToLocal[nfa.startStateId] = localIdx++;
+    
+    // Sort other state IDs for deterministic output
+    std::set<int> otherIds;
+    for (const auto& pair : nfa.states) {
+        if (pair.first != nfa.startStateId) otherIds.insert(pair.first);
+    }
+    for (int id : otherIds) {
+        globalToLocal[id] = localIdx++;
+    }
+
+    out << "// NFA for regex index " << nfa.regexIndex << "\n";
+    out << "module nfa_" << nfa.regexIndex << " (\n"
+        << "    input  wire       clk,\n"
+        << "    input  wire       rst,\n"
+        << "    input  wire       start,\n"
+        << "    input  wire       end_of_str,\n"
+        << "    input  wire [7:0] char_in,\n"
+        << "    output reg        match\n"
+        << ");\n\n";
+
+    out << "    // One-hot state register\n"
+        << "    reg [" << numStates - 1 << ":0] state_reg;\n"
+        << "    wire [" << numStates - 1 << ":0] next_state;\n\n";
+
+    // Build an inverted transition map for efficient lookup: dst -> list of (src, char)
+    std::map<int, std::vector<std::pair<int, unsigned char>>> invertedTransitions;
+    for(const auto& [srcGlobalId, srcState] : nfa.states) {
+        for(const auto& [c, dstIds] : srcState.transitions) {
+            for(int dstGlobalId : dstIds) {
+                invertedTransitions[dstGlobalId].push_back({srcGlobalId, c});
+            }
+        }
+    }
+
+    for (const auto& [globalId, localId] : globalToLocal) {
+        out << "    assign next_state[" << localId << "] = ";
+        
+        std::vector<std::string> terms;
+        if(auto it = invertedTransitions.find(globalId); it != invertedTransitions.end()) {
+            for(const auto& [srcGlobalId, c] : it->second) {
+                int srcLocal = globalToLocal.at(srcGlobalId);
+                terms.push_back("(state_reg[" + std::to_string(srcLocal) + "] && (char_in == 8'd" + std::to_string(c) + "))");
+            }
+        }
+
+        if (terms.empty()) {
+            out << "1'b0;\n";
+        } else if (terms.size() == 1) {
+            out << terms[0] << ";\n";
+        } else {
+            out << "(\n";
+            for (size_t t = 0; t < terms.size(); ++t) {
+                out << "        " << terms[t] << (t < terms.size() - 1 ? " ||\n" : "\n");
+            }
+            out << "    );\n";
+        }
+    }
+
+    out << "\n    always @(posedge clk) begin\n"
+        << "        if (rst || start) begin\n"
+        << "            // Reset to start state (one-hot)\n"
+        << "            state_reg <= 1 << " << globalToLocal.at(nfa.startStateId) << ";\n"
+        << "        end else begin\n"
+        << "            state_reg <= next_state;\n"
+        << "        end\n"
+        << "    end\n\n"
+        << "    // Match logic: asserted on cycle following end_of_str\n"
+        << "    always @(posedge clk) begin\n"
+        << "        if (rst || start) begin\n"
+        << "            match <= 1'b0;\n"
+        << "        end else if (end_of_str) begin\n"
+        << "            match <= ";
+    
+    std::vector<std::string> acceptTerms;
+    for (const auto& [id, state] : nfa.states) {
+        if (state.isAccept) {
+            acceptTerms.push_back("state_reg[" + std::to_string(globalToLocal.at(id)) + "]");
+        }
+    }
+
+    if (acceptTerms.empty()) {
+        out << "1'b0";
+    } else if (acceptTerms.size() == 1) {
+        out << acceptTerms[0];
+    } else {
+        out << "(|{";
+        for (size_t t = 0; t < acceptTerms.size(); ++t) {
+            out << acceptTerms[t] << (t < acceptTerms.size() - 1 ? ", " : "");
+        }
+        out << "})";
+    }
+    
+    out << ";\n"
+        << "        end else begin\n"
+        << "            match <= 1'b0;\n"
+        << "        end\n"
+        << "    end\n\n"
+        << "endmodule\n";
+}
+
+void Emitter::emitTopModule(const std::vector<std::unique_ptr<NFA>>& nfas, const std::filesystem::path& outputDir) {
+    auto filePath = outputDir / "top.v";
+    std::ofstream out;
+    out.exceptions(std::ofstream::failbit | std::ofstream::badbit);
+
+    try {
+        out.open(filePath);
+    } catch (const std::ios_base::failure& e) {
+        throw std::system_error(errno, std::generic_category(), "Could not open " + filePath.string() + " for writing");
+    }
+
+    out << "module top (\n"
+        << "    input  wire        clk,\n"
+        << "    input  wire        rst,\n"
+        << "    input  wire        start,\n"
+        << "    input  wire        end_of_str,\n"
+        << "    input  wire [7:0]  char_in,\n"
+        << "    output wire [" << (nfas.size() - 1) << ":0] match_bus\n"
+        << ");\n\n";
+
+    for (size_t i = 0; i < nfas.size(); ++i) {
+        out << "    nfa_" << nfas[i]->regexIndex << " inst_" << nfas[i]->regexIndex << " (\n"
+            << "        .clk(clk), .rst(rst), .start(start), .end_of_str(end_of_str), .char_in(char_in), .match(match_bus[" << i << "])\n"
+            << "    );\n\n";
+    }
+    out << "endmodule\n";
+}
+
+void Emitter::emitTestbench(const std::vector<std::unique_ptr<NFA>>& nfas,
+                           const std::filesystem::path& outputDir, 
+                           const std::vector<std::string>& testStrings, 
+                           const std::vector<std::string>& expectedMatches) {
+    auto filePath = outputDir / "tb_top.v";
+    std::ofstream out;
+    out.exceptions(std::ofstream::failbit | std::ofstream::badbit);
+
+    try {
+        out.open(filePath);
+    } catch (const std::ios_base::failure& e) {
+        throw std::system_error(errno, std::generic_category(), "Could not open " + filePath.string() + " for writing");
+    }
+
+    size_t numNFAs = nfas.size();
+
+    out << "`timescale 1ns / 1ps\n\n"
+        << "module tb_top;\n"
+        << "    reg clk, rst, start, end_of_str;\n"
+        << "    reg [7:0] char_in;\n"
+        << "    wire [" << (numNFAs > 0 ? numNFAs - 1 : 0) << ":0] match_bus;\n\n"
+        << "    top uut (.clk(clk), .rst(rst), .start(start), .end_of_str(end_of_str), .char_in(char_in), .match_bus(match_bus));\n\n"
+        << "    always #5 clk = ~clk;\n\n"
+        << "    initial begin\n"
+        << "        // synthesis translate_off\n"
+        << "        `ifndef SYNTHESIS\n"
+        << "        $dumpfile(\"dump.vcd\");\n"
+        << "        $dumpvars(0, tb_top);\n"
+        << "        `endif\n"
+        << "        // synthesis translate_on\n\n"
+        << "        clk = 0; rst = 1; start = 0; end_of_str = 0; char_in = 0;\n"
+        << "        #20 rst = 0; #10;\n\n";
+
+    for (size_t i = 0; i < testStrings.size(); ++i) {
+        const std::string& s = testStrings[i];
+        out << "        // Test case " << i << ": \"" << s << "\"\n"
+            << "        start = 1; #10 start = 0;\n";
+        
+        for (char c : s) {
+            out << "        char_in = 8'h" << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(static_cast<unsigned char>(c)) << std::dec << "; #10;\n";
+        }
+        
+        out << "        end_of_str = 1; #10; // Assert for one cycle\n";
+        out << "        // Match output is valid on the cycle immediately following end_of_str assertion\n";
+        
+        if (i < expectedMatches.size()) {
+            if (expectedMatches[i].length() != numNFAs) {
+                std::string error_msg = "Testbench generation error: expected_matches[" + std::to_string(i) + "] has length " + std::to_string(expectedMatches[i].length()) + " but " + std::to_string(numNFAs) + " NFAs exist.";
+                throw std::runtime_error(error_msg);
+            }
+            out << "        if (match_bus === " << numNFAs << "'b" << expectedMatches[i] << ") begin\n"
+                << "            $display(\"PASS: Test case " << i << " ('" << s << "') matches expected mask " << expectedMatches[i] << "\");\n"
+                << "        end else begin\n"
+                << "            $display(\"FAIL: Test case " << i << " ('" << s << "') expected " << expectedMatches[i] << ", got %b\", match_bus);\n"
+                << "        end\n";
+        } else {
+             out << "        $display(\"INFO: Result for '" << s << "': %b\", match_bus);\n";
+        }
+        out << "        end_of_str = 0; #10;\n\n"; // De-assert and wait before next test
+    }
+
+    out << "        $display(\"All tests completed.\");\n"
+        << "        #100; $finish;\n    end\nendmodule\n";
+}
+</file>
+
+<file path="src/emitter.h">
+#ifndef EMITTER_H
+#define EMITTER_H
+
+#include <vector>
+#include <string>
+#include <memory>
+#include "nfa.h"
+
+#include <filesystem>
+#include <system_error>
+
+class Emitter {
+public:
+    Emitter() = delete; // Static class, no instances
+
+    /**
+     * @brief Emits all Verilog files (nfa_*.v, top.v, tb_top.v) to the specified directory.
+     * @param nfas The vector of NFAs to be emitted.
+     * @param outputDir Directory where files will be written.
+     * @param testStrings Optional test strings for the testbench.
+     * @param expectedMatches Optional expected match masks for the testbench.
+     */
+    static void emit(const std::vector<std::unique_ptr<NFA>>& nfas,
+                     const std::string& outputDir, 
+                     const std::vector<std::string>& testStrings = {}, 
+                     const std::vector<std::string>& expectedMatches = {});
+
+private:
+    static void emitNFAModule(const NFA& nfa, const std::filesystem::path& outputDir);
+    static void emitTopModule(const std::vector<std::unique_ptr<NFA>>& nfas, const std::filesystem::path& outputDir);
+    static void emitTestbench(const std::vector<std::unique_ptr<NFA>>& nfas,
+                              const std::filesystem::path& outputDir, 
+                              const std::vector<std::string>& testStrings, 
+                              const std::vector<std::string>& expectedMatches);
+};
+
+#endif // EMITTER_H
+</file>
+
+<file path="details.md">
+# Stage 1 — C++ Regex Parser
+
+This stage is responsible for transforming a raw regular expression string into an Abstract Syntax Tree (AST) that can be processed by the NFA construction stage.
+
+---
+
+## 1. Lexer Details
+
+### Overview
+The lexer is the first component. Its primary responsibility is to read a raw regular expression string character-by-character and transform it into a sequence of typed tokens. This abstraction simplifies the downstream parsing process by handling character-level concerns like literal character validation and metacharacter identification.
+
+### Token Types
+The lexer identifies the following token types:
+
+| Token Type | Representation | Description |
+|---|---|---|
+| `LITERAL` | Any printable ASCII (32–126) | Represents a literal character match. |
+| `DOT` | `.` | Matches any single character. |
+| `STAR` | `*` | Kleene star: zero or more repetitions. |
+| `PLUS` | `+` | One or more repetitions. |
+| `QUESTION` | `?` | Optional: zero or one occurrence. |
+| `PIPE` | `\|` | Union / Alternation operator. |
+| `LPAREN` | `(` | Start of a subexpression group. |
+| `RPAREN` | `)` | End of a subexpression group. |
+| `END_OF_INPUT`| `\0` | Sentinel token marking the end of the regex string. |
+
+### Input Processing Rules
+1. **Character Filtering:** Only printable ASCII characters (codes 32–126) are allowed. Non-printable characters are reported by their numeric code in error messages.
+2. **Coordinate Tracking:** Each token records its `line` and `column` number for precise error reporting.
+3. **Implicit Concatenation:** The lexer treats characters as discrete units. The parser handles the logic of implicit concatenation.
+4. **Metacharacter Recognition:** Characters like `*`, `+`, `?`, `|`, `(`, `)`, and `.` are immediately recognized as their respective operator tokens.
+
+---
+
+## 2. Parser Details
+
+### Overview
+The parser consumes the token stream produced by the lexer and constructs an Abstract Syntax Tree (AST). It uses a **recursive descent** approach and strictly enforces operator precedence.
+
+### Grammar and Precedence
+The parser implements the following grammar (highest to lowest precedence):
+
+1. **Atom:** The basic building blocks (Literal, Dot, or a Parenthesized Expression).
+2. **Factor:** An Atom optionally followed by a quantifier (`*`, `+`, or `?`).
+3. **Term:** One or more concatenated Factors.
+4. **Expression:** One or more Terms separated by the union operator (`|`).
+
+### AST Node Structure
+The parser produces a tree composed of various node types (Literal, Dot, Concatenation, Union, Star, Plus, Optional). 
+
+**Important Design Note:** While the base `ASTNode` class contains fields for `nullable`, `firstpos`, and `lastpos`, these are **not** populated by the parser. They are reserved for and populated by the **Stage 2 — NFA Builder**.
+
+### Error Handling
+The parser detects and reports the following errors with meaningful messages including line and column numbers:
+
+- **Unmatched Parentheses:** e.g., `(a|b`.
+- **Quantifier applied to nothing:** e.g., `*abc` or `(+a)`.
+- **Empty alternation branch:** Both left-side (e.g., `|abc`) and right-side (e.g., `abc|`) are explicitly detected.
+- **Unexpected Tokens:** Tokens that don't fit the expected grammar at the current position.
+
+---
+
+## Stage 2 — NFA Construction
+
+This stage converts the Abstract Syntax Tree (AST) into an ε-free Non-deterministic Finite Automaton (NFA) using Glushkov's algorithm.
+
+---
+
+### 1. Glushkov's Algorithm
+The algorithm produces an NFA with exactly $n+1$ states, where $n$ is the number of symbol occurrences (literals or dots) in the regex.
+
+#### Construction Steps:
+1. **Linearization:** Each symbol is assigned a unique integer position (1 to $n$).
+2. **Nullable:** Computes if a sub-expression can match the empty string.
+3. **Firstpos:** The set of positions that can match the first character of a string.
+4. **Lastpos:** The set of positions that can match the last character of a string.
+5. **Followpos:** A map where for each position $p$, it stores the set of positions that can immediately follow it.
+6. **Transitions:** 
+   - State 0 is the start state.
+   - Transitions from state 0 go to all positions in `firstpos` of the root.
+   - Transitions from state $p$ go to all positions in `followpos(p)`.
+
+### 2. Global State Numbering
+To facilitate Stage 3 (Verilog Emitter), every NFA state across all input regular expressions is assigned a **globally unique ID**. This ensures that multiple FSM modules can be instantiated in a single Verilog project without identifier collisions.
+
+### 3. Dot Operator Handling
+The dot (`.`) matches any character. In the NFA, a dot position generates 256 individual transition arcs for every possible byte value (0–255). This ensures the hardware matcher correctly identifies any character in that position.
+
+---
+
+## Validation and Simulation
+
+To ensure the integrity of the regex-to-NFA conversion before hardware generation, the builder includes an optional simulation engine.
+
+### 1. NFA Simulation
+The `NFA::simulate` method implements a software-based FSM runner:
+- It tracks the set of active states simultaneously (handling non-determinism).
+- It consumes the input string character-by-character.
+- It returns `true` if any final active state is an acceptance state.
+
+
+## Stage 3 — Verilog Emitter
+
+This stage transforms the internal NFA structures into synthesizable Verilog HDL code.
+
+### 1. Per-NFA Modules
+For each regular expression, the emitter generates a self-contained Verilog module (`nfa_N.v`):
+- **File I/O:** All file and directory operations use the C++17 `<filesystem>` library for cross-platform compatibility and improved error handling. File streams are configured to throw exceptions on failure, providing detailed system-level error messages (e.g., "Permission denied").
+- **Robustness:** The emitter validates its inputs before generating code. It will skip emission if no valid NFAs are provided and will throw an error if the golden reference data does not match the number of NFAs, preventing the generation of invalid Verilog.
+- **One-Hot Encoding:** The state register uses one-hot encoding (one flip-flop per NFA state). This is ideal for FPGA implementation as it results in high-speed, shallow combinational logic.
+- **Optimized Next-State Logic:** Transitions are implemented as pure combinational logic. To improve generation speed, the logic is built by iterating over destination states rather than source states.
+- **Deterministic Output:** Global state IDs are sorted during emission to ensure consistent and deterministic Verilog code generation.
+- **Match Logic:** The `match` output is registered. The logic uses a Verilog OR-reduction (`|{...}`) for a concise and efficient way to check if any of the final accept states are active.
+
+### 2. Top-Level Wrapper
+A `top.v` module is generated to instantiate all NFA modules in parallel.
+- All modules share the same clock, reset, and input character stream.
+- The results are aggregated into a `match_bus` where each bit corresponds to one regular expression (Regex $k$ maps to `match_bus[k]`).
+
+### 3. Simulation Testbench
+A fully functional testbench (`tb_top.v`) is generated:
+- It automatically loads test cases from `test_strings.txt`.
+- It integrates **Golden Reference** matches generated via `std::regex`.
+- For each test string, it drives the `start`, `char_in`, and `end_of_str` signals with correct, deterministic timing. The testbench now samples the registered `match` output on the exact clock cycle it becomes valid (the cycle immediately following the assertion of `end_of_str`), explicitly avoiding race conditions and double-sampling bugs.
+- It reports `PASS` or `FAIL` for each test case directly in the simulation console and generates a `dump.vcd` for waveform analysis.
+</file>
+
+<file path="Makefile">
+CC = g++
+CFLAGS = -Wall -Wextra -std=c++17 -Isrc
+BUILD_DIR = build
+TARGET = $(BUILD_DIR)/regex_builder
+TESTER = $(BUILD_DIR)/nfa_tester
+GOLDEN = $(BUILD_DIR)/golden
+SRCS = src/main.cpp src/lexer.cpp src/parser.cpp src/nfa.cpp src/emitter.cpp
+TEST_SRCS = src/parser_tester.cpp src/lexer.cpp src/parser.cpp src/nfa.cpp
+GOLDEN_SRCS = src/golden.cpp
+OBJS = $(SRCS:.cpp=.o)
+TEST_OBJS = $(TEST_SRCS:.cpp=.o)
+GOLDEN_OBJS = $(GOLDEN_SRCS:.cpp=.o)
+
+INPUT_DIR = inputs
+OUTPUT_DIR = output
+
+all: $(TARGET) $(GOLDEN)
+
+$(TARGET): $(OBJS) | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -o $(TARGET) $(OBJS)
+
+$(TESTER): $(TEST_OBJS) | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -o $(TESTER) $(TEST_OBJS)
+
+$(GOLDEN): $(GOLDEN_OBJS) | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -o $(GOLDEN) $(GOLDEN_OBJS)
+
+$(BUILD_DIR):
+	mkdir -p $(BUILD_DIR)
+
+$(OUTPUT_DIR):
+	mkdir -p $(OUTPUT_DIR)
+
+%.o: %.cpp
+	$(CC) $(CFLAGS) -c $< -o $@
+
+run: all | $(OUTPUT_DIR)
+	./$(TARGET) $(INPUT_DIR)/regexes.txt $(INPUT_DIR)/test_strings.txt $(OUTPUT_DIR)
+
+test: $(TESTER)
+	./$(TESTER) $(INPUT_DIR)/regexes.txt $(INPUT_DIR)/test_strings.txt
+
+golden: $(GOLDEN) | $(OUTPUT_DIR)
+	./$(GOLDEN) $(INPUT_DIR)/regexes.txt $(INPUT_DIR)/test_strings.txt $(OUTPUT_DIR)/expected_matches.txt
+
+clean:
+	rm -f src/*.o
+	rm -rf $(BUILD_DIR)
+	rm -rf $(OUTPUT_DIR)
+
+.PHONY: all run test golden clean
+</file>
+
+<file path="src/main.cpp">
+#include <iostream>
+#include <fstream>
+#include <string>
+#include <vector>
+#include <memory>
+#include <regex>
+#include <algorithm>
+#include "lexer.h"
+#include "parser.h"
+#include "nfa.h"
+#include "emitter.h"
+
+std::string trim(const std::string& str) {
+    size_t first = str.find_first_not_of(" \t\r\n");
+    if (first == std::string::npos) return "";
+    size_t last = str.find_last_not_of(" \t\r\n");
+    return str.substr(first, (last - first + 1));
+}
+
+int main(int argc, char* argv[]) {
+    if (argc < 2) {
+        std::cerr << "Usage: " << argv[0] << " <regex_file> [test_strings_file] [output_dir]" << std::endl;
+        return 1;
+    }
+
+    std::string regexFilename = argv[1];
+    std::string testFilename = (argc > 2) ? argv[2] : "";
+    std::string outputDir = (argc > 3) ? argv[3] : "output";
+
+    if (testFilename == "-" || testFilename == "none") {
+        testFilename = "";
+    }
+
+    std::ifstream regexFile(regexFilename);
+    if (!regexFile.is_open()) {
+        std::cerr << "Failed to open regex file: " << regexFilename << std::endl;
+        return 1;
+    }
+
+    std::string line;
+    int lineNum = 0;
+    int regexIdx = 0;
+    std::vector<std::unique_ptr<NFA>> nfas;
+    std::vector<std::string> rawRegexes;
+
+    std::cout << "Starting XIIRegexBuilder pipeline..." << std::endl;
+
+    while (std::getline(regexFile, line)) {
+        lineNum++;
+        std::string trimmedLine = trim(line);
+        if (trimmedLine.empty() || trimmedLine[0] == '#') continue;
+
+        std::cout << "Processing Regex [" << regexIdx << "]: " << trimmedLine << std::endl;
+
+        Lexer lexer(trimmedLine, lineNum);
+        try {
+            std::vector<Token> tokens = lexer.tokenize();
+            Parser parser(tokens);
+            auto ast = parser.parse();
+            auto nfa = NFABuilder::build(ast.get(), regexIdx);
+            if (nfa) {
+                nfas.push_back(std::move(nfa));
+                rawRegexes.push_back(trimmedLine);
+                regexIdx++; // Increment only on success
+            }
+        } catch (const std::exception& e) {
+            std::cerr << "Error parsing regex: " << e.what() << std::endl;
+        }
+    }
+
+    if (nfas.empty()) {
+        std::cerr << "No valid regexes found. Exiting." << std::endl;
+        return 1;
+    }
+
+    std::vector<std::string> testStrings;
+    std::vector<std::string> expectedMatches;
+
+    if (!testFilename.empty()) {
+        std::ifstream testFile(testFilename);
+        if (testFile.is_open()) {
+            std::string tline;
+            while (std::getline(testFile, tline)) {
+                size_t last = tline.find_last_not_of("\r\n");
+                std::string s = (last != std::string::npos) ? tline.substr(0, last + 1) : (tline.empty() ? "" : tline);
+                
+                // Skip comments and truly blank lines
+                if (!s.empty() && s[0] == '#') continue;
+                if (s.empty() && trim(tline).empty()) continue;
+
+                testStrings.push_back(s);
+                
+                // Generate expected matches using std::regex
+                std::string mask = "";
+                for (const auto& re_str : rawRegexes) {
+                    bool match = false;
+                    try {
+                        std::regex re(re_str);
+                        match = std::regex_match(s, re);
+                    } catch (...) {}
+                    mask += (match ? "1" : "0");
+                }
+                std::reverse(mask.begin(), mask.end());
+                expectedMatches.push_back(mask);
+            }
+            std::cout << "Loaded " << testStrings.size() << " test strings and generated golden matches." << std::endl;
+        }
+    }
+
+    std::cout << "Generated " << nfas.size() << " NFAs. Emitting Verilog..." << std::endl;
+
+    try {
+        Emitter::emit(nfas, outputDir, testStrings, expectedMatches);
+        std::cout << "Pipeline complete. Verilog files emitted to '" << outputDir << "/'" << std::endl;
+    } catch (const std::exception& e) {
+        std::cerr << "Error during Verilog emission: " << e.what() << std::endl;
+        return 1;
+    }
+
+    return 0;
+}
+</file>
+
+</files>

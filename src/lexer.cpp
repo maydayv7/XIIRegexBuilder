@@ -42,6 +42,11 @@ std::vector<Token> Lexer::tokenize() {
         int currentCharCol = col;
 
         switch (c) {
+            case '\\':
+                advance(); // consume '\'
+                if (isAtEnd()) throw std::runtime_error("Trailing backslash");
+                tokens.emplace_back(TokenType::LITERAL, advance(), line, currentCharCol);
+                break;
             case '.':
                 tokens.emplace_back(TokenType::DOT, advance(), line, currentCharCol);
                 break;
@@ -62,6 +67,12 @@ std::vector<Token> Lexer::tokenize() {
                 break;
             case ')':
                 tokens.emplace_back(TokenType::RPAREN, advance(), line, currentCharCol);
+                break;
+            case '[':
+                tokens.emplace_back(TokenType::LBRACKET, advance(), line, currentCharCol);
+                break;
+            case ']':
+                tokens.emplace_back(TokenType::RBRACKET, advance(), line, currentCharCol);
                 break;
             default:
                 if (c >= 32 && c <= 126) {

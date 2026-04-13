@@ -89,7 +89,7 @@ void Emitter::emitNFAModule(const NFA &nfa, const std::filesystem::path &outputD
         << "    input  wire       rst,\n"
         << "    input  wire       start,\n"
         << "    input  wire [7:0] char_in,\n"
-        << "    output reg        match\n"
+        << "    output wire       match\n"
         << ");\n\n";
 
     out << "    // One-hot state register\n"
@@ -174,21 +174,18 @@ void Emitter::emitNFAModule(const NFA &nfa, const std::filesystem::path &outputD
         }
     }
 
-    // FIX: Using synchronous enable
+    // FIX: Using synchronous enable with word-boundary (space) reset
     out << "\n    always @(posedge clk) begin\n"
-        << "        if (rst || start) begin\n"
-        << "            // Reset to start state (one-hot)\n"
-        << "            state_reg <= 1 << " << globalToLocal.at(nfa.startStateId) << ";\n"
+        << "        if (rst || start || (en && char_in == 8'h20)) begin\n"
+        << "            // Reset to start state (one-hot) on reset, start pulse, or space\n"
+        << "            state_reg <= " << (numStates > 0 ? "1" : "0") << ";\n"
         << "        end else if (en) begin\n"
         << "            state_reg <= next_state;\n"
         << "        end\n"
-        << "    end\n\n"
-        << "    // Match logic: asserted immediately on accept state\n"
-        << "    always @(posedge clk) begin\n"
-        << "        if (rst || start) begin\n"
-        << "            match <= 1'b0;\n"
-        << "        end else if (en) begin\n"
-        << "            match <= ";
+        << "    end\n\n";
+
+    out << "    // Match logic: asserted immediately on accept state (combinational)\n"
+        << "    assign match = ";
 
     std::vector<std::string> acceptTerms;
     for (const auto &[id, state] : nfa.states)
@@ -217,9 +214,7 @@ void Emitter::emitNFAModule(const NFA &nfa, const std::filesystem::path &outputD
         out << "})";
     }
 
-    out << ";\n"
-        << "        end\n"
-        << "    end\n\n"
+    out << ";\n\n"
         << "endmodule\n";
 }
 
@@ -538,53 +533,100 @@ void Emitter::emitTopFPGA(const std::vector<std::unique_ptr<NFA>> &nfas, const s
         .tx_busy(tx_busy)
     );
 
-    // 32-Byte Delay Line
+    // 32-Byte Delay Line (Parallel data and redaction bits)
     reg [7:0] delay_line [0:31];
-    integer i;
+    reg [31:0] redact_line = 32'd0;
+    integer i, j;
     
-    reg [4:0] redact_counter = 0;
-    wire [7:0] mux_out = (redact_counter > 0) ? 8'h58 : delay_line[31]; // 'X' is 8'h58
+    wire [7:0] mux_out = (redact_line[31]) ? 8'h58 : delay_line[31]; // 'X' is 8'h58
+
+    // 16-Byte Output FIFO to prevent UART character loss
+    reg [7:0] fifo_mem [0:15];
+    reg [3:0] fifo_head = 0;
+    reg [3:0] fifo_tail = 0;
+    reg [4:0] fifo_count = 0;
+
+    // Word counter to track length of current sequence (resets on space)
+    reg [4:0] word_counter = 0;
+    reg [4:0] word_counter_d1 = 0;
+    reg [4:0] word_counter_d2 = 0;
 
     reg rx_ready_prev = 0;
     
     always @(posedge clk) begin
         if (rst_btn) begin
             nfa_en <= 0;
-            nfa_start <= 1; // Reset NFA
-            redact_counter <= 0;
+            nfa_start <= 1;
+            redact_line <= 32'd0;
             tx_start <= 0;
             rx_ready_prev <= 0;
+            match_leds <= 0;
+            fifo_head <= 0;
+            fifo_tail <= 0;
+            fifo_count <= 0;
+            word_counter <= 0;
+            word_counter_d1 <= 0;
+            word_counter_d2 <= 0;
+            for (i=0; i<32; i=i+1) delay_line[i] <= 8'h20; // Initialize with spaces
         end else begin
-            nfa_start <= 0; // Release NFA reset
+            nfa_start <= 0;
             nfa_en <= 0;
             tx_start <= 0;
             rx_ready_prev <= rx_ready;
 
-            // Handle Redaction Counter Decay
-            if (redact_counter > 0 && rx_ready && !rx_ready_prev) begin
-                redact_counter <= redact_counter - 1;
+            // Global Reset on Null (8'h00) or Carriage Return (8'h0D)
+            if (rx_ready && !rx_ready_prev && (rx_data == 8'h00 || rx_data == 8'h0D)) begin
+                nfa_start <= 1;
+                redact_line <= 32'd0;
+                word_counter <= 0;
+                for (i=0; i<32; i=i+1) delay_line[i] <= 8'h20; // Clear delay line with spaces
             end
 
-            // Match Event: Overrides decay to extend the window
-            if (|match_bus) begin
-                if (get_redaction_length(match_bus) > redact_counter) begin
-                    redact_counter <= get_redaction_length(match_bus);
-                end
-                match_leds <= match_bus; // Visual feedback
-            end
-
-            // Process Incoming Byte
+            // Process Incoming Byte (Push to Delay Line and FIFO)
             if (rx_ready && !rx_ready_prev) begin
-                // Shift delay line
-                for (i=31; i>0; i=i-1) delay_line[i] <= delay_line[i-1];
+                for (i=31; i>0; i=i-1) begin
+                    delay_line[i] <= delay_line[i-1];
+                    redact_line[i] <= redact_line[i-1];
+                end
                 delay_line[0] <= rx_data;
+                redact_line[0] <= 1'b0;
                 
-                // Feed NFA
                 nfa_char_in <= rx_data;
-                nfa_en <= 1; // Pulse NFA enable
-                
-                // Transmit the delayed byte out
-                tx_data <= mux_out;
+                nfa_en <= 1; 
+
+                // Update word counter (Capped at 31)
+                if (rx_data == 8'h20) word_counter <= 0;
+                else if (word_counter < 31) word_counter <= word_counter + 1;
+
+                // Push mux_out to FIFO
+                if (fifo_count < 16) begin
+                    fifo_mem[fifo_head] <= mux_out;
+                    fifo_head <= fifo_head + 1;
+                    fifo_count <= fifo_count + 1;
+                end
+            end
+
+            // Delay word_counter to align with 2-cycle NFA match latency
+            word_counter_d1 <= word_counter;
+            word_counter_d2 <= word_counter_d1;
+
+            // Update Match LEDs and mark redaction bits (Word-Scoped Redaction)
+            if (|match_bus) begin
+                match_leds <= match_bus;
+                // Redact only the current word (up to 32 bytes)
+                // Start at index 2 (NFA lag) and go back word_counter_d2 steps
+                for (j = 0; j < 32; j = j + 1) begin
+                    if (j >= 2 && j < (2 + word_counter_d2)) begin
+                        redact_line[j] <= 1'b1;
+                    end
+                end
+            end
+
+            // Pop from FIFO to UART TX
+            if (fifo_count > 0 && !tx_busy && !tx_start) begin
+                tx_data <= fifo_mem[fifo_tail];
+                fifo_tail <= fifo_tail + 1;
+                fifo_count <= fifo_count - 1;
                 tx_start <= 1;
             end
         end

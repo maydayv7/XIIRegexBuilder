@@ -1,3 +1,7 @@
-................
-...-..-....
-.+@.+\..+
+# Balanced Redaction Patterns
+# Email: engine supports [a-z] style ranges and \. escape
+[a-zA-Z0-9.]+@[a-zA-Z0-9.]+\.[a-zA-Z]+
+# Phone: Standard 10-digit
+[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]
+# Phone: Hyphenated
+[0-9][0-9][0-9]-[0-9][0-9][0-9]-[0-9][0-9][0-9][0-9]
