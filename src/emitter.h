@@ -34,6 +34,7 @@ private:
                               const std::vector<std::string> &testStrings,
                               const std::vector<std::string> &expectedMatches);
     static void emitUART(const std::filesystem::path &outputDir);
+    static void emitUARTTx(const std::filesystem::path &outputDir);
     static void emitTopFPGA(const std::vector<std::unique_ptr<NFA>> &nfas, const std::filesystem::path &outputDir);
     static void emitConstraints(const std::vector<std::unique_ptr<NFA>> &nfas, const std::filesystem::path &outputDir);
 };
