@@ -474,24 +474,6 @@ void Emitter::emitTopFPGA(const std::vector<std::unique_ptr<NFA>> &nfas, const s
         << "    output reg  [" << (numNFAs > 0 ? numNFAs - 1 : 0) << ":0] match_leds // LEDs for match output\n"
         << ");\n\n";
 
-    out << "    function [4:0] get_redaction_length;\n"
-        << "        input [" << (numNFAs > 0 ? numNFAs - 1 : 0) << ":0] matches;\n"
-        << "        integer j;\n"
-        << "        reg [4:0] max_len;\n"
-        << "        begin\n"
-        << "            max_len = 5'd0;\n";
-    for (size_t i = 0; i < numNFAs; ++i)
-    {
-        // Heuristic: number of states - 1, capped at 31
-        int len = nfas[i]->states.size() - 1;
-        if (len > 31)
-            len = 31;
-        out << "            if (matches[" << i << "] && (5'd" << len << " > max_len)) max_len = 5'd" << len << ";\n";
-    }
-    out << "            get_redaction_length = max_len;\n"
-        << "        end\n"
-        << "    endfunction\n\n";
-
     out << R"(
     wire [7:0] rx_data;
     wire       rx_ready;
@@ -548,8 +530,6 @@ void Emitter::emitTopFPGA(const std::vector<std::unique_ptr<NFA>> &nfas, const s
 
     // Word counter to track length of current sequence (resets on space)
     reg [4:0] word_counter = 0;
-    reg [4:0] word_counter_d1 = 0;
-    reg [4:0] word_counter_d2 = 0;
 
     reg rx_ready_prev = 0;
     
@@ -565,8 +545,6 @@ void Emitter::emitTopFPGA(const std::vector<std::unique_ptr<NFA>> &nfas, const s
             fifo_tail <= 0;
             fifo_count <= 0;
             word_counter <= 0;
-            word_counter_d1 <= 0;
-            word_counter_d2 <= 0;
             for (i=0; i<32; i=i+1) delay_line[i] <= 8'h20; // Initialize with spaces
         end else begin
             nfa_start <= 0;
@@ -606,17 +584,12 @@ void Emitter::emitTopFPGA(const std::vector<std::unique_ptr<NFA>> &nfas, const s
                 end
             end
 
-            // Delay word_counter to align with 2-cycle NFA match latency
-            word_counter_d1 <= word_counter;
-            word_counter_d2 <= word_counter_d1;
-
-            // Update Match LEDs and mark redaction bits (Word-Scoped Redaction)
+            // Update Match LEDs and mark redaction bits (Surgical Word Redaction)
             if (|match_bus) begin
                 match_leds <= match_bus;
-                // Redact only the current word (up to 32 bytes)
-                // Start at index 2 (NFA lag) and go back word_counter_d2 steps
+                // Redact exactly the current word starting from index 0
                 for (j = 0; j < 32; j = j + 1) begin
-                    if (j >= 2 && j < (2 + word_counter_d2)) begin
+                    if (j < word_counter) begin
                         redact_line[j] <= 1'b1;
                     end
                 end
