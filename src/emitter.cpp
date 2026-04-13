@@ -115,10 +115,10 @@ void Emitter::emitNFAModule(const NFA &nfa, const std::filesystem::path &outputD
         std::vector<std::string> terms;
 
         // FIX: Start state is always active to allow substring matching
-        // if (localId == 0)
-        // {
-        //     terms.push_back("1'b1");
-        // }
+        if (localId == 0)
+        {
+            terms.push_back("1'b1");
+        }
 
         if (auto it = invertedTransitions.find(globalId); it != invertedTransitions.end())
         {
@@ -183,13 +183,12 @@ void Emitter::emitNFAModule(const NFA &nfa, const std::filesystem::path &outputD
         << "            state_reg <= next_state;\n"
         << "        end\n"
         << "    end\n\n"
-        << "    // Match logic: asserted on cycle following end_of_str\n"
+        << "    // Match logic: asserted immediately on accept state\n"
         << "    always @(posedge clk) begin\n"
         << "        if (rst || start) begin\n"
         << "            match <= 1'b0;\n"
         << "        end else if (en) begin\n"
-        << "            if (end_of_str) begin\n"
-        << "                match <= ";
+        << "            match <= ";
 
     std::vector<std::string> acceptTerms;
     for (const auto &[id, state] : nfa.states)
@@ -219,9 +218,6 @@ void Emitter::emitNFAModule(const NFA &nfa, const std::filesystem::path &outputD
     }
 
     out << ";\n"
-        << "            end else begin\n"
-        << "                match <= 1'b0;\n"
-        << "            end\n"
         << "        end\n"
         << "    end\n\n"
         << "endmodule\n";
