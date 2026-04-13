@@ -484,8 +484,24 @@ void Emitter::emitTopFPGA(const std::vector<std::unique_ptr<NFA>> &nfas, const s
         << "    input  wire clk,        // 100 MHz system clock\n"
         << "    input  wire rst_btn,    // Physical reset button\n"
         << "    input  wire uart_rx_pin,// USB UART RX pin\n"
+        << "    output wire uart_tx_pin,// USB UART TX pin\n"
         << "    output reg  [" << (numNFAs > 0 ? numNFAs - 1 : 0) << ":0] match_leds // LEDs for match output\n"
         << ");\n\n";
+
+    out << "    function [4:0] get_redaction_length;\n"
+        << "        input [" << (numNFAs > 0 ? numNFAs - 1 : 0) << ":0] matches;\n"
+        << "        begin\n"
+        << "            get_redaction_length = 5'd0;\n";
+    for (size_t i = 0; i < numNFAs; ++i)
+    {
+        // Heuristic: number of states - 1, capped at 31
+        int len = nfas[i]->states.size() - 1;
+        if (len > 31)
+            len = 31;
+        out << "            if (matches[" << i << "]) get_redaction_length = 5'd" << len << ";\n";
+    }
+    out << "        end\n"
+        << "    endfunction\n\n";
 
     out << R"(
     wire [7:0] rx_data;
@@ -517,70 +533,66 @@ void Emitter::emitTopFPGA(const std::vector<std::unique_ptr<NFA>> &nfas, const s
         << "    );\n\n";
 
     out << R"(
-    // FIX: Holding logic so we don't drop UART bytes if the FSM is busy
-    reg       rx_pending = 1'b0;
-    reg [7:0] rx_latched_data = 8'h00;
+    // UART TX instantiation
+    reg        tx_start = 1'b0;
+    reg  [7:0] tx_data = 8'h00;
+    wire       tx_busy;
 
-    // Control State Machine
-    localparam S_IDLE = 3'd0, S_STEP_NFA = 3'd1, S_END1 = 3'd2, S_END2 = 3'd3, S_END3 = 3'd4, S_RESET = 3'd5;
-    reg [2:0] state = S_IDLE;
+    uart_tx uart_tx_inst (
+        .clk(clk),
+        .tx_start(tx_start),
+        .tx_data(tx_data),
+        .tx(uart_tx_pin),
+        .tx_busy(tx_busy)
+    );
 
+    // 32-Byte Delay Line
+    reg [7:0] delay_line [0:31];
+    integer i;
+    
+    reg [4:0] redact_counter = 0;
+    wire [7:0] mux_out = (redact_counter > 0) ? 8'h58 : delay_line[31]; // 'X' is 8'h58
+
+    reg rx_ready_prev = 0;
+    
     always @(posedge clk) begin
         if (rst_btn) begin
-            rx_pending <= 1'b0;
-        end else if (rx_ready) begin
-            rx_latched_data <= rx_data;
-            rx_pending <= 1'b1;
-        end else if (state == S_IDLE && rx_pending) begin
-            rx_pending <= 1'b0;
-        end
-    end
-
-    always @(posedge clk) begin
-        if (rst_btn) begin
-            state <= S_RESET;
-            match_leds <= 0;
             nfa_en <= 0;
+            nfa_start <= 1; // Reset NFA
+            redact_counter <= 0;
+            tx_start <= 0;
+            rx_ready_prev <= 0;
         end else begin
-            case (state)
-                S_IDLE: begin
-                    nfa_en <= 0;
-                    nfa_start <= 0;
-                    nfa_end_of_str <= 0;
-                    if (rx_pending) begin
-                        if (rx_latched_data == 8'h0A || rx_latched_data == 8'h0D) begin 
-                            nfa_end_of_str <= 1;
-                            state <= S_END1;
-                        end else begin
-                            nfa_char_in <= rx_latched_data;
-                            state <= S_STEP_NFA;
-                        end
-                    end
-                end
-                S_STEP_NFA: begin
-                    nfa_en <= 1; // Pulse NFA enable once
-                    state <= S_IDLE;
-                end
-                S_END1: begin
-                    nfa_en <= 1; // Pulse enable to register end_of_str
-                    state <= S_END2;
-                end
-                S_END2: begin
-                    nfa_en <= 1; // Pulse enable again to clock the match flip-flops
-                    nfa_end_of_str <= 0;
-                    state <= S_END3;
-                end
-                S_END3: begin
-                    nfa_en <= 0;
-                    match_leds <= match_bus; // Capture the stable result to LEDs
-                    state <= S_RESET;
-                end
-                S_RESET: begin
-                    nfa_start <= 1;
-                    nfa_en <= 1; // Pulse enable to reset NFA states
-                    state <= S_IDLE;
-                end
-            endcase
+            nfa_start <= 0; // Release NFA reset
+            nfa_en <= 0;
+            tx_start <= 0;
+            rx_ready_prev <= rx_ready;
+
+            // Handle Redaction Counter Decay
+            if (redact_counter > 0 && rx_ready && !rx_ready_prev) begin
+                redact_counter <= redact_counter - 1;
+            end
+
+            // Match Event: Overrides decay to extend the window
+            if (|match_bus) begin
+                redact_counter <= get_redaction_length(match_bus);
+                match_leds <= match_bus; // Visual feedback
+            end
+
+            // Process Incoming Byte
+            if (rx_ready && !rx_ready_prev) begin
+                // Shift delay line
+                for (i=31; i>0; i=i-1) delay_line[i] <= delay_line[i-1];
+                delay_line[0] <= rx_data;
+                
+                // Feed NFA
+                nfa_char_in <= rx_data;
+                nfa_en <= 1; // Pulse NFA enable
+                
+                // Transmit the delayed byte out
+                tx_data <= mux_out;
+                tx_start <= 1;
+            end
         end
     end
 endmodule
@@ -600,7 +612,9 @@ void Emitter::emitConstraints(const std::vector<std::unique_ptr<NFA>> &nfas, con
 
     out << "## USB-RS232 Interface (Nexys A7)\n"
         << "set_property PACKAGE_PIN C4 [get_ports uart_rx_pin]\n"
-        << "set_property IOSTANDARD LVCMOS33 [get_ports uart_rx_pin]\n\n";
+        << "set_property IOSTANDARD LVCMOS33 [get_ports uart_rx_pin]\n"
+        << "set_property PACKAGE_PIN D4 [get_ports uart_tx_pin]\n"
+        << "set_property IOSTANDARD LVCMOS33 [get_ports uart_tx_pin]\n\n";
 
     out << "## Buttons (Nexys A7 Center Button - BTNC)\n"
         << "set_property PACKAGE_PIN N17 [get_ports rst_btn]\n"
