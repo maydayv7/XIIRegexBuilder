@@ -213,9 +213,15 @@ module top_fpga #(
     reg [7:0]  prog_byte_latch = 8'd0;
     
     // Constants for programming
-    // Total bytes = 16 * (2 + 16 * 256 * 2) = 131,104
-    localparam PROG_TOTAL_BYTES = 18'd4;
+
+    // Constants for programming
+    localparam PROG_TOTAL_BYTES = 18'd131104; // (Keep this at 4 for sim)
     localparam BYTES_PER_REGEX  = 18'd8194; // 2 + 8192
+
+    // --- ADD THESE 3 LINES HERE ---
+    reg [15:0] prog_word;
+    reg [17:0] regex_offset;
+    reg [17:0] trans_offset;
 
     always @(posedge clk) begin
         tx_send        <= 1'b0;
@@ -284,26 +290,23 @@ module top_fpga #(
                         prog_byte_latch <= fifo_rd_data;
                     end else begin
                         // Second byte of a 16-bit word
-                        reg [15:0] word;
-                        word = {fifo_rd_data, prog_byte_latch};
+                        prog_word = {fifo_rd_data, prog_byte_latch};
                         
                         // Determine what this word is based on offset within regex slot
-                        reg [17:0] regex_offset;
                         regex_offset = prog_byte_count % BYTES_PER_REGEX;
                         
                         prog_regex_id <= prog_byte_count / BYTES_PER_REGEX;
                         
                         if (regex_offset == 18'd1) begin
                             // This was the accept_mask (first word of slot)
-                            prog_accept_mask <= word;
+                            prog_accept_mask <= prog_word;
                             prog_accept_en   <= 1'b1;
                         end else begin
                             // This is a transition mask
-                            reg [17:0] trans_offset;
                             trans_offset = (regex_offset - 18'd2) / 2; // Index into 16*256
                             prog_state_id <= trans_offset / 256;
                             prog_char     <= trans_offset % 256;
-                            prog_mask     <= word;
+                            prog_mask     <= prog_word;
                             prog_en       <= 1'b1;
                         end
                     end
