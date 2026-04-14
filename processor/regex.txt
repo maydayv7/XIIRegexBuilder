@@ -1,0 +1,13 @@
+ab*c
+ab*
+a(b|c)
+b*a
+c+
+(a|b|c)a
+ab?c
+(abc)*
+a.c
+b(ab)c
+(a|c)*
+cc*b
+a+
