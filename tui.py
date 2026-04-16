@@ -174,32 +174,47 @@ def build_match_table(state: MatchState, patterns: list[str]) -> Table:
         expand=True,
         show_lines=True,
     )
-    table.add_column("#", style="dim", width=4, justify="right")
-    table.add_column("Pattern", style="white", min_width=20)
-    table.add_column("MATCH", justify="center", width=8)
-    table.add_column("Hits", justify="right", width=8)
 
     with state.lock:
         bits = state.match_bits[:]
         hits = state.hit_counts[:]
         n = state.num_regex
 
-    for i in range(n):
-        label = patterns[i] if i < len(patterns) else f"Regex {i}"
-        matched = bool(bits[i]) if i < len(bits) else False
-        hit_cnt = hits[i] if i < len(hits) else 0
+    num_cols = 2 if n > 8 else 1
+    rows_per_col = (n + num_cols - 1) // num_cols
 
-        if matched:
-            match_cell = Text("● MATCH", style="bold green")
-        else:
-            match_cell = Text("○ —", style="dim red")
+    for _ in range(num_cols):
+        table.add_column("#", style="dim", width=4, justify="right")
+        table.add_column("Pattern", style="white", min_width=20)
+        table.add_column("MATCH", justify="center", width=8)
+        table.add_column("Hits", justify="right", width=8)
 
-        table.add_row(
-            str(i),
-            f"[italic]{label}[/italic]",
-            match_cell,
-            f"[yellow]{hit_cnt}[/yellow]",
-        )
+    for row_idx in range(rows_per_col):
+        row_data = []
+        for col_idx in range(num_cols):
+            i = col_idx * rows_per_col + row_idx
+            if i < n:
+                label = patterns[i] if i < len(patterns) else f"Regex {i}"
+                if len(label) > 30:
+                    label = label[:27] + "..."
+                matched = bool(bits[i]) if i < len(bits) else False
+                hit_cnt = hits[i] if i < len(hits) else 0
+
+                if matched:
+                    match_cell = Text("● MATCH", style="bold green")
+                else:
+                    match_cell = Text("○ —", style="dim red")
+
+                row_data.extend([
+                    str(i),
+                    f"[italic]{label}[/italic]",
+                    match_cell,
+                    f"[yellow]{hit_cnt}[/yellow]"
+                ])
+            else:
+                row_data.extend(["", "", "", ""])
+
+        table.add_row(*row_data)
 
     return table
 
