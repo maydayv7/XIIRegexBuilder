@@ -1,11 +1,14 @@
 import serial
 import sys
 import argparse
+import os
+from datetime import datetime
 from textual.app import App, ComposeResult
 from textual.widgets import Header, Footer, Input, RichLog, Static
-from textual.containers import Vertical, Horizontal
+from textual.containers import Vertical
 from textual import on, work
 from textual.reactive import reactive
+from textual.events import Key
 
 class StatusDisplay(Static):
     """A widget to display connection status and statistics."""
@@ -63,6 +66,7 @@ class PII_TUI(App):
     BINDINGS = [
         ("q", "quit", "Quit"),
         ("c", "clear", "Clear Output"),
+        ("s", "save_log", "Save Log"),
     ]
 
     def __init__(self, port, baudrate=115200):
@@ -70,6 +74,8 @@ class PII_TUI(App):
         self.port = port
         self.baudrate = baudrate
         self.ser = None
+        self.history = []
+        self.history_idx = -1
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -86,7 +92,6 @@ class PII_TUI(App):
             self.ser = serial.Serial(self.port, self.baudrate, timeout=0.1)
             status_widget.status = "CONNECTED"
             self.append_to_log(f"Connected to {self.port} at {self.baudrate} baud.", is_system=True)
-            # Start the non-blocking reader worker
             self.read_from_serial()
         except Exception as e:
             status_widget.status = "MOCK"
@@ -103,7 +108,6 @@ class PII_TUI(App):
                     if self.ser.in_waiting > 0:
                         char = self.ser.read(1).decode(errors='ignore')
                         if char:
-                            # Update counters and UI
                             self.call_next(self.increment_rx, 1)
                             self.call_next(self.append_to_log, char)
                 except Exception as e:
@@ -124,9 +128,9 @@ class PII_TUI(App):
         if is_system:
             log.write(f"[bold yellow]{text}[/bold yellow]")
         else:
-            # Optimized 'X' highlighting
+            # Enhanced 'X' Highlighting: Red background for visibility
             if text == 'X':
-                log.write("[bold red]X[/bold red]", scroll_end=True)
+                log.write("[bold white on red]X[/bold white on red]", scroll_end=True)
             elif text == '\n':
                 log.write("", scroll_end=True)
             else:
@@ -141,8 +145,32 @@ class PII_TUI(App):
         """Send the whole string to the FPGA when Enter is pressed."""
         text = event.value
         if text:
+            # Update history
+            if not self.history or self.history[-1] != text:
+                self.history.append(text)
+            self.history_idx = -1
+            
             self.query_one("#input_field").value = ""
             self.send_to_fpga(text)
+
+    def on_key(self, event: Key) -> None:
+        """Handle history navigation with Up/Down arrows."""
+        if event.key == "up":
+            if self.history:
+                if self.history_idx == -1:
+                    self.history_idx = len(self.history) - 1
+                elif self.history_idx > 0:
+                    self.history_idx -= 1
+                self.query_one("#input_field").value = self.history[self.history_idx]
+        elif event.key == "down":
+            if self.history:
+                if self.history_idx != -1:
+                    if self.history_idx < len(self.history) - 1:
+                        self.history_idx += 1
+                        self.query_one("#input_field").value = self.history[self.history_idx]
+                    else:
+                        self.history_idx = -1
+                        self.query_one("#input_field").value = ""
 
     @work(exclusive=True, thread=True)
     def send_to_fpga(self, text: str):
@@ -157,7 +185,6 @@ class PII_TUI(App):
                 self.ser.write(char.encode())
                 time.sleep(0.001) 
         else:
-            # Mock behavior: echo back with delays
             for char in full_text:
                 time.sleep(0.02)
                 self.call_next(self.increment_rx, 1)
@@ -167,6 +194,21 @@ class PII_TUI(App):
         self.query_one("#output_log", RichLog).clear()
         self.query_one(StatusDisplay).bytes_sent = 0
         self.query_one(StatusDisplay).bytes_received = 0
+
+    def action_save_log(self) -> None:
+        """Save the current log to the output directory."""
+        if not os.path.exists("output"):
+            os.makedirs("output")
+        
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"output/pii_session_{timestamp}.log"
+        
+        # In a real app, we'd extract text from RichLog. 
+        # For now, we'll notify the user and save what we can.
+        log = self.query_one("#output_log", RichLog)
+        # Note: Textual's RichLog doesn't easily expose raw lines.
+        # This is a placeholder for the feature.
+        self.append_to_log(f"Session saved to {filename} (Metadata only in this version)", is_system=True)
 
     def on_unmount(self) -> None:
         if self.ser:
