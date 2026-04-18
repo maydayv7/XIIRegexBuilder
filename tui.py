@@ -5,7 +5,7 @@ import os
 from datetime import datetime
 from textual.app import App, ComposeResult
 from textual.widgets import Header, Footer, Input, RichLog, Static
-from textual.containers import Vertical
+from textual.containers import Vertical, Horizontal
 from textual import on, work
 from textual.reactive import reactive
 from textual.events import Key
@@ -16,14 +16,22 @@ class StatusDisplay(Static):
     status = reactive("DISCONNECTED")
     bytes_sent = reactive(0)
     bytes_received = reactive(0)
+    tx_active = reactive(False)
+    rx_active = reactive(False)
 
     def render(self) -> str:
         color = "green" if self.status == "CONNECTED" else "yellow" if self.status == "MOCK" else "red"
+        
+        tx_led = "[bold bright_green]●[/]" if self.tx_active else "[dim]○[/]"
+        rx_led = "[bold bright_cyan]●[/]" if self.rx_active else "[dim]○[/]"
+        
         return (
-            f"Status: [{color}]{self.status}[/{color}] | "
-            f"Port: [cyan]{self.app.port}[/cyan] | "
-            f"Tx: [blue]{self.bytes_sent}B[/blue] | "
-            f"Rx: [magenta]{self.bytes_received}B[/magenta]"
+            f"[bold]XII Regex Builder[/]\n"
+            f"[dim]PII Guard[/]\n\n"
+            f"Status: [{color}]{self.status}[/{color}]\n"
+            f"Port:   [cyan]{self.app.port}[/cyan]\n\n"
+            f"Tx: {tx_led} [blue]{self.bytes_sent}B[/blue]\n"
+            f"Rx: {rx_led} [magenta]{self.bytes_received}B[/magenta]\n"
         )
 
 class PII_TUI(App):
@@ -34,32 +42,60 @@ class PII_TUI(App):
         background: #080808;
     }
 
+    #main_layout {
+        height: 1fr;
+    }
+
+    StatusDisplay {
+        width: 30;
+        height: 1fr;
+        background: #111111;
+        color: #AAAAAA;
+        padding: 1 2;
+        border-right: double #333333;
+    }
+
+    #output_container {
+        height: 1fr;
+        width: 1fr;
+    }
+
     #output_log {
         background: #000000;
         color: #00FF00;
-        border: tall #004400;
+        border: heavy #004400;
         height: 1fr;
-        margin: 1;
+        margin: 1 1 0 1;
     }
     
-    StatusDisplay {
-        background: #111111;
-        color: #AAAAAA;
-        padding: 0 1;
-        border-bottom: solid #333333;
-        height: 1;
-    }
-    
-    Input {
+    #input_container {
+        height: auto;
         dock: bottom;
-        border: tall #004400;
+        margin: 0 1 1 1;
+        background: #000000;
+        border: heavy #004400;
+    }
+    
+    #input_container:focus-within {
+        border: heavy #00AA00;
+    }
+
+    #prompt {
+        padding: 1 1 0 2;
+        color: #00AA00;
+        background: #000000;
+        width: auto;
+    }
+
+    Input {
+        width: 1fr;
         background: #000000;
         color: #00FF00;
-        margin: 0 1 1 1;
+        border: none;
     }
 
     Input:focus {
-        border: tall #00AA00;
+        border: none;
     }
     """
 
@@ -76,13 +112,18 @@ class PII_TUI(App):
         self.ser = None
         self.history = []
         self.history_idx = -1
+        self._tx_timer = None
+        self._rx_timer = None
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
-        yield StatusDisplay()
-        with Vertical(id="output_container"):
-            yield RichLog(id="output_log", markup=True, wrap=True)
-        yield Input(placeholder="Type text to stream to FPGA...", id="input_field")
+        with Horizontal(id="main_layout"):
+            yield StatusDisplay()
+            with Vertical(id="output_container"):
+                yield RichLog(id="output_log", markup=True, wrap=True)
+                with Horizontal(id="input_container"):
+                    yield Static("fpga-guard> ", id="prompt")
+                    yield Input(placeholder="Type text to stream to FPGA...", id="input_field")
         yield Footer()
 
     def on_mount(self) -> None:
@@ -111,22 +152,40 @@ class PII_TUI(App):
                             self.call_next(self.increment_rx, 1)
                             self.call_next(self.append_to_log, char)
                 except Exception as e:
-                    self.call_next(self.append_to_log, f"\nSerial Error: {e}\n", is_system=True)
+                    self.call_next(self.append_to_log, f"Serial Error: {e}", is_system=True)
                     break
             else:
                 import time
                 time.sleep(0.01)
 
+    def _reset_tx_led(self):
+        self.query_one(StatusDisplay).tx_active = False
+        
+    def _reset_rx_led(self):
+        self.query_one(StatusDisplay).rx_active = False
+
     def increment_rx(self, count: int):
-        self.query_one(StatusDisplay).bytes_received += count
+        status = self.query_one(StatusDisplay)
+        status.bytes_received += count
+        status.rx_active = True
+        if self._rx_timer:
+            self._rx_timer.stop()
+        self._rx_timer = self.set_timer(0.1, self._reset_rx_led)
 
     def increment_tx(self, count: int):
-        self.query_one(StatusDisplay).bytes_sent += count
+        status = self.query_one(StatusDisplay)
+        status.bytes_sent += count
+        status.tx_active = True
+        if self._tx_timer:
+            self._tx_timer.stop()
+        self._tx_timer = self.set_timer(0.1, self._reset_tx_led)
 
     def append_to_log(self, text: str, is_system: bool = False):
         log = self.query_one("#output_log", RichLog)
         if is_system:
-            log.write(f"[bold yellow]{text}[/bold yellow]")
+            timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+            log.write(f"[dim gray]{timestamp}[/] [bold yellow]{text}[/bold yellow]")
+            log.scroll_end(animate=False)
         else:
             # Enhanced 'X' Highlighting: Red background for visibility
             if text == 'X':
@@ -136,9 +195,6 @@ class PII_TUI(App):
             else:
                 escaped = text.replace("[", "[[").replace("]", "]]")
                 log.write(escaped, scroll_end=False)
-        
-        if is_system:
-            log.scroll_end(animate=False)
 
     @on(Input.Submitted)
     def on_input_submitted(self, event: Input.Submitted) -> None:
@@ -151,6 +207,13 @@ class PII_TUI(App):
             self.history_idx = -1
             
             self.query_one("#input_field").value = ""
+            
+            # Write a timestamped entry for our own message 
+            timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+            log = self.query_one("#output_log", RichLog)
+            log.write(f"[dim gray]{timestamp}[/] [bold cyan]fpga-guard>[/] {text}")
+            log.scroll_end(animate=False)
+            
             self.send_to_fpga(text)
 
     def on_key(self, event: Key) -> None:
@@ -176,7 +239,6 @@ class PII_TUI(App):
     def send_to_fpga(self, text: str):
         """Worker to send characters to FPGA with small delays."""
         full_text = text + "\r"
-        self.call_next(self.append_to_log, f"Sending: {text}", is_system=True)
         self.call_next(self.increment_tx, len(full_text))
         
         import time
@@ -205,9 +267,6 @@ class PII_TUI(App):
         
         # In a real app, we'd extract text from RichLog. 
         # For now, we'll notify the user and save what we can.
-        log = self.query_one("#output_log", RichLog)
-        # Note: Textual's RichLog doesn't easily expose raw lines.
-        # This is a placeholder for the feature.
         self.append_to_log(f"Session saved to {filename} (Metadata only in this version)", is_system=True)
 
     def on_unmount(self) -> None:
@@ -220,4 +279,5 @@ if __name__ == "__main__":
     args = parser.parse_args()
     
     app = PII_TUI(port=args.port)
+    app.title = "XII Regex Builder - PII Guard"
     app.run()
