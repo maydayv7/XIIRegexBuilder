@@ -1,28 +1,21 @@
-import threading
 import serial
 import sys
 import argparse
-import time
+import asyncio
 from textual.app import App, ComposeResult
-from textual.widgets import Header, Footer, Input, Static
+from textual.widgets import Header, Footer, Input, RichLog
 from textual.containers import Vertical
-from textual import on
+from textual import on, work
 
 class PII_TUI(App):
     """A Textual TUI for interacting with the FPGA PII Guard."""
     
     CSS = """
-    #output_container {
+    #output_log {
         background: #000000;
         color: #00FF00;
         border: solid #00AA00;
         height: 1fr;
-        overflow-y: scroll;
-    }
-    
-    #output_text {
-        width: 100%;
-        padding: 1;
     }
     
     Input {
@@ -41,14 +34,11 @@ class PII_TUI(App):
         self.port = port
         self.baudrate = baudrate
         self.ser = None
-        self.reader_thread = None
-        self.running = True
-        self.log_content = ""
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
         with Vertical(id="output_container"):
-            yield Static("", id="output_text", markup=True)
+            yield RichLog(id="output_log", markup=True, wrap=True)
         yield Input(placeholder="Type text to stream to FPGA...", id="input_field")
         yield Footer()
 
@@ -56,79 +46,84 @@ class PII_TUI(App):
         """Called when the app is mounted."""
         try:
             self.ser = serial.Serial(self.port, self.baudrate, timeout=0.1)
-            self.append_to_log(f"Connected to {self.port} at {self.baudrate} baud.\n", is_system=True)
-            
-            # Start reader thread
-            self.reader_thread = threading.Thread(target=self.read_from_serial, daemon=True)
-            self.reader_thread.start()
+            self.append_to_log(f"Connected to {self.port} at {self.baudrate} baud.", is_system=True)
+            # Start the non-blocking reader worker
+            self.read_from_serial()
         except Exception as e:
-            self.append_to_log(f"Error connecting to {self.port}: {e}\n", is_system=True)
-            self.append_to_log("Running in Mock Mode (No FPGA detected)\n", is_system=True)
+            self.append_to_log(f"Error connecting to {self.port}: {e}", is_system=True)
+            self.append_to_log("Running in Mock Mode (No FPGA detected)", is_system=True)
             self.ser = None
 
+    @work(exclusive=True, thread=True)
     def read_from_serial(self):
-        """Continuously read from serial port."""
-        while self.running:
+        """Continuously read from serial port in a background thread."""
+        while True:
             if self.ser and self.ser.is_open:
                 try:
                     if self.ser.in_waiting > 0:
                         char = self.ser.read(1).decode(errors='ignore')
                         if char:
-                            # Update UI from thread
-                            self.call_from_thread(self.append_to_log, char)
+                            # Schedule the UI update on the main thread
+                            self.call_next(self.append_to_log, char)
                 except Exception as e:
-                    self.call_from_thread(self.append_to_log, f"\nSerial Error: {e}\n", is_system=True)
+                    self.call_next(self.append_to_log, f"\nSerial Error: {e}\n", is_system=True)
                     break
             else:
-                time.sleep(0.1)
+                # Small sleep in thread to prevent CPU spinning
+                import time
+                time.sleep(0.01)
 
     def append_to_log(self, text: str, is_system: bool = False):
+        log = self.query_one("#output_log", RichLog)
         if is_system:
-            self.log_content += f"[bold yellow]{text}[/bold yellow]"
+            log.write(f"[bold yellow]{text}[/bold yellow]")
         else:
-            for char in text:
-                if char == 'X':
-                    self.log_content += "[bold red]X[/bold red]"
-                elif char == '\n':
-                    self.log_content += "\n"
-                else:
-                    # Escape markup characters to avoid unintended formatting
-                    escaped = char.replace("[", "[[").replace("]", "]]")
-                    self.log_content += escaped
+            # Optimized 'X' highlighting
+            if text == 'X':
+                log.write("[bold red]X[/bold red]", scroll_end=True)
+            elif text == '\n':
+                log.write("", scroll_end=True) # RichLog handles newlines via write calls
+            else:
+                # Escape markup characters
+                escaped = text.replace("[", "[[").replace("]", "]]")
+                log.write(escaped, scroll_end=False)
         
-        # Cap log size to avoid performance issues (last 15000 chars)
-        if len(self.log_content) > 15000:
-            self.log_content = self.log_content[-10000:]
-            
-        static = self.query_one("#output_text")
-        static.update(self.log_content)
-        self.query_one("#output_container").scroll_end(animate=False)
+        # Always scroll to end for new system messages or if requested
+        if is_system:
+            log.scroll_end(animate=False)
 
     @on(Input.Submitted)
     def on_input_submitted(self, event: Input.Submitted) -> None:
         """Send the whole string to the FPGA when Enter is pressed."""
         text = event.value
         if text:
-            # Append a newline to trigger the FPGA's session reset logic
-            full_text = text + "\r"
-            self.append_to_log(f"\nSending: {text}\n", is_system=True)
-            if self.ser:
-                for char in full_text:
-                    self.ser.write(char.encode())
-                    # Small sleep to ensure we don't overflow the FPGA's FIFO
-                    time.sleep(0.001) 
-            else:
-                # Mock echo for demonstration
-                for c in full_text:
-                    self.append_to_log(c)
+            # Reset input immediately for better UX
             self.query_one("#input_field").value = ""
+            # Start worker to send data without blocking the UI
+            self.send_to_fpga(text)
+
+    @work(exclusive=True, thread=True)
+    def send_to_fpga(self, text: str):
+        """Worker to send characters to FPGA with small delays."""
+        # Append a newline to trigger the FPGA's session reset logic
+        full_text = text + "\r"
+        self.call_next(self.append_to_log, f"Sending: {text}", is_system=True)
+        
+        import time
+        if self.ser:
+            for char in full_text:
+                self.ser.write(char.encode())
+                time.sleep(0.001) 
+        else:
+            # Mock behavior: echo back with delays
+            for char in full_text:
+                time.sleep(0.02)
+                self.call_next(self.append_to_log, char)
 
     def action_clear(self) -> None:
-        self.log_content = ""
-        self.query_one("#output_text").update("")
+        self.query_one("#output_log", RichLog).clear()
 
     def on_unmount(self) -> None:
-        self.running = False
         if self.ser:
             self.ser.close()
 
