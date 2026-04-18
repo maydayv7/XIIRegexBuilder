@@ -1,11 +1,12 @@
 import serial
+import serial.tools.list_ports
 import sys
 import argparse
 import os
 from datetime import datetime
 from textual.app import App, ComposeResult
-from textual.widgets import Header, Footer, Input, RichLog, Static
-from textual.containers import Vertical, Horizontal
+from textual.widgets import Header, Footer, Input, RichLog, Static, TabbedContent, TabPane, DataTable, Label, Button, Select, Switch
+from textual.containers import Vertical, Horizontal, Container, VerticalScroll
 from textual.screen import ModalScreen
 from textual import on, work
 from textual.reactive import reactive
@@ -24,24 +25,24 @@ class HelpScreen(ModalScreen):
         width: 60;
         height: auto;
         padding: 1 2;
-        border: heavy #00AA00;
-        background: #111111;
-        color: #AAAAAA;
+        border: heavy #444444;
+        background: #1A1B26;
+        color: #A9B1D6;
     }
     """
 
     def compose(self) -> ComposeResult:
         with Vertical(id="help_dialog"):
-            yield Static("[bold #00FF00]XII Regex Builder - PII Guard TUI[/]\n", id="help_title")
+            yield Static("[bold #7AA2F7]XII Regex Builder - PII Guard TUI[/]\n", id="help_title")
             yield Static("Keyboard Shortcuts:\n"
-                         "  [green]?[/green] / [green]F1[/green] : Show this help\n"
-                         "  [green]q[/green] : Quit application\n"
-                         "  [green]c[/green] : Clear log output\n"
-                         "  [green]s[/green] : Save session log to file\n"
-                         "  [green]p[/green] : Toggle auto-scrolling\n"
-                         "  [green]h[/green] : Toggle hex dump view\n"
-                         "  [green]r[/green] : Attempt connection recovery\n"
-                         "  [green]Up/Down[/green] : Navigate input history\n")
+                         "  [#7AA2F7]?[/#7AA2F7] / [#7AA2F7]F1[/#7AA2F7] : Show this help\n"
+                         "  [#7AA2F7]q[/#7AA2F7] : Quit application\n"
+                         "  [#7AA2F7]c[/#7AA2F7] : Clear log output\n"
+                         "  [#7AA2F7]s[/#7AA2F7] : Save session log to file\n"
+                         "  [#7AA2F7]p[/#7AA2F7] : Toggle auto-scrolling\n"
+                         "  [#7AA2F7]h[/#7AA2F7] : Toggle hex dump view\n"
+                         "  [#7AA2F7]r[/#7AA2F7] : Reconnect to UART\n"
+                         "  [#7AA2F7]Up/Down[/#7AA2F7] : Input history\n")
             yield Static("\nPress any key to close.")
 
     def on_key(self, event: Key) -> None:
@@ -64,15 +65,15 @@ class StatusDisplay(Static):
         tx_led = "[bold bright_green]●[/]" if self.tx_active else "[dim]○[/]"
         rx_led = "[bold bright_cyan]●[/]" if self.rx_active else "[dim]○[/]"
         
-        scroll_status = "[green]ON[/]" if self.auto_scroll else "[red]OFF[/]"
-        hex_status = "[green]ON[/]" if self.hex_view else "[red]OFF[/]"
+        scroll_status = "[#7AA2F7]ON[/]" if self.auto_scroll else "[#F7768E]OFF[/]"
+        hex_status = "[#7AA2F7]ON[/]" if self.hex_view else "[#F7768E]OFF[/]"
         
         return (
-            f"[bold]XII Regex Builder[/]\n"
-            f"[dim]PII Guard[/]\n\n"
+            f"[bold #7AA2F7]XII REGEX BUILDER[/]\n"
+            f"[dim]Hardware PII Guard[/]\n\n"
             f"Status: [{color}]{self.status}[/{color}]\n"
-            f"Port:   [cyan]{self.app.port}[/cyan]\n\n"
-            f"Tx: {tx_led} [blue]{self.bytes_sent}B[/blue]\n"
+            f"Port:   [#BB9AF7]{self.app.port}[/#BB9AF7]\n\n"
+            f"Tx: {tx_led} [cyan]{self.bytes_sent}B[/cyan]\n"
             f"Rx: {rx_led} [magenta]{self.bytes_received}B[/magenta]\n\n"
             f"[dim]Auto-Scroll:[/] {scroll_status}\n"
             f"[dim]Hex View:[/]    {hex_status}\n"
@@ -83,7 +84,7 @@ class PII_TUI(App):
     
     CSS = """
     PII_TUI {
-        background: #080808;
+        background: #1A1B26;
     }
 
     #main_layout {
@@ -93,21 +94,28 @@ class PII_TUI(App):
     StatusDisplay {
         width: 30;
         height: 1fr;
-        background: #111111;
-        color: #AAAAAA;
+        background: #16161E;
+        color: #A9B1D6;
         padding: 1 2;
-        border-right: double #333333;
+        border-right: double #444444;
+    }
+
+    TabbedContent {
+        height: 1fr;
+    }
+
+    TabPane {
+        padding: 0;
     }
 
     #output_container {
         height: 1fr;
-        width: 1fr;
     }
 
     #output_log {
-        background: #000000;
-        color: #00FF00;
-        border: heavy #004400;
+        background: #16161E;
+        color: #C0CAF5;
+        border: heavy #444444;
         height: 1fr;
         margin: 1 1 0 1;
     }
@@ -116,30 +124,53 @@ class PII_TUI(App):
         height: auto;
         dock: bottom;
         margin: 0 1 1 1;
-        background: #000000;
-        border: heavy #004400;
+        background: #16161E;
+        border: heavy #444444;
     }
     
     #input_container:focus-within {
-        border: heavy #00AA00;
+        border: heavy #7AA2F7;
     }
 
     #prompt {
         padding: 1 1 0 2;
-        color: #00AA00;
-        background: #000000;
+        color: #7AA2F7;
+        background: #16161E;
         width: auto;
     }
 
     Input {
         width: 1fr;
-        background: #000000;
-        color: #00FF00;
+        background: #16161E;
+        color: #C0CAF5;
         border: none;
     }
 
     Input:focus {
         border: none;
+    }
+
+    /* Settings Tab Styles */
+    #settings_container {
+        padding: 2;
+    }
+
+    .setting_row {
+        height: auto;
+        margin-bottom: 1;
+        padding: 1;
+    }
+
+    .setting_label {
+        width: 20;
+        color: #7AA2F7;
+    }
+
+    /* Regex Monitor Styles */
+    #regex_table {
+        height: 1fr;
+        border: heavy #444444;
+        margin: 1;
     }
     """
 
@@ -147,8 +178,8 @@ class PII_TUI(App):
         ("q", "quit", "Quit"),
         ("c", "clear", "Clear"),
         ("s", "save_log", "Save"),
-        ("p", "toggle_autoscroll", "Auto-Scroll"),
-        ("h", "toggle_hex", "Hex View"),
+        ("p", "toggle_autoscroll", "Scroll"),
+        ("h", "toggle_hex", "Hex"),
         ("r", "reconnect", "Reconnect"),
         ("question_mark", "help", "Help"),
         ("f1", "help", "Help"),
@@ -167,20 +198,102 @@ class PII_TUI(App):
         self._rx_buffer = ""
         self.auto_scroll = True
         self.hex_view = False
+        self.regexes = []
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
         with Horizontal(id="main_layout"):
             yield StatusDisplay(id="status_display")
-            with Vertical(id="output_container"):
-                yield RichLog(id="output_log", markup=True, wrap=True)
-                with Horizontal(id="input_container"):
-                    yield Static("fpga-guard> ", id="prompt")
-                    yield Input(placeholder="Type text to stream to FPGA... (Press ? for Help)", id="input_field")
+            with TabbedContent(id="tabs"):
+                with TabPane("Console", id="console_tab"):
+                    with Vertical(id="output_container"):
+                        yield RichLog(id="output_log", markup=True, wrap=True)
+                        with Horizontal(id="input_container"):
+                            yield Static("fpga-guard> ", id="prompt")
+                            yield Input(placeholder="Type text to stream to FPGA...", id="input_field")
+                with TabPane("Regex Monitor", id="regex_tab"):
+                    yield DataTable(id="regex_table")
+                with TabPane("Settings", id="settings_tab"):
+                    with VerticalScroll(id="settings_container"):
+                        with Horizontal(classes="setting_row"):
+                            yield Label("Serial Port:", classes="setting_label")
+                            yield Select(id="port_select", options=[(self.port, self.port)])
+                            yield Button("Refresh", id="refresh_ports", variant="primary")
+                        with Horizontal(classes="setting_row"):
+                            yield Label("Baudrate:", classes="setting_label")
+                            yield Select(id="baud_select", options=[(str(b), str(b)) for b in [9600, 38400, 57600, 115200, 230400, 460800]], value=str(self.baudrate))
+                        with Horizontal(classes="setting_row"):
+                            yield Label("Auto-Scroll:", classes="setting_label")
+                            yield Switch(id="scroll_switch", value=self.auto_scroll)
+                        with Horizontal(classes="setting_row"):
+                            yield Label("Hex View:", classes="setting_label")
+                            yield Switch(id="hex_switch", value=self.hex_view)
+                        yield Button("Apply & Reconnect", id="apply_settings", variant="success")
         yield Footer()
 
     def on_mount(self) -> None:
         """Called when the app is mounted."""
+        # Load regexes for the monitor
+        self.load_regexes()
+        
+        # Initialize regex table
+        table = self.query_one("#regex_table", DataTable)
+        table.add_columns("ID", "Pattern", "Match Count")
+        for i, regex in enumerate(self.regexes):
+            table.add_row(str(i), regex, "0")
+            
+        # Initial port discovery
+        self.refresh_ports()
+        
+        # Connect
+        self.action_reconnect()
+
+    def load_regexes(self):
+        try:
+            if os.path.exists("inputs/regexes.txt"):
+                with open("inputs/regexes.txt", "r") as f:
+                    for line in f:
+                        line = line.strip()
+                        if line and not line.startswith("#"):
+                            self.regexes.append(line)
+        except Exception as e:
+            self.notify(f"Failed to load regexes: {e}", severity="error")
+
+    def refresh_ports(self):
+        ports = [p.device for p in serial.tools.list_ports.comports()]
+        if not ports:
+            ports = [self.port]
+        
+        select = self.query_one("#port_select", Select)
+        select.set_options([(p, p) for p in ports])
+        if self.port in ports:
+            select.value = self.port
+        else:
+            select.value = ports[0]
+        self.notify("Serial ports refreshed.")
+
+    @on(Button.Pressed, "#refresh_ports")
+    def on_refresh_ports(self):
+        self.refresh_ports()
+
+    @on(Button.Pressed, "#apply_settings")
+    def on_apply_settings(self):
+        port_select = self.query_one("#port_select", Select)
+        baud_select = self.query_one("#baud_select", Select)
+        scroll_switch = self.query_one("#scroll_switch", Switch)
+        hex_switch = self.query_one("#hex_switch", Switch)
+        
+        self.port = str(port_select.value)
+        self.baudrate = int(str(baud_select.value))
+        self.auto_scroll = scroll_switch.value
+        self.hex_view = hex_switch.value
+        
+        # Update reactive states
+        status = self.query_one("#status_display", StatusDisplay)
+        status.auto_scroll = self.auto_scroll
+        status.hex_view = self.hex_view
+        
+        self.notify(f"Settings applied. Reconnecting to {self.port}...")
         self.action_reconnect()
 
     @work(exclusive=True, thread=True)
@@ -191,7 +304,6 @@ class PII_TUI(App):
                 try:
                     in_waiting = self.ser.in_waiting
                     if in_waiting > 0:
-                        # Chunked reading for high-latency/high-throughput robustness
                         chunk = self.ser.read(min(in_waiting, 4096)).decode(errors='ignore')
                         if chunk:
                             self.call_next(self.increment_rx, len(chunk))
@@ -207,6 +319,7 @@ class PII_TUI(App):
         status_widget = self.query_one("#status_display", StatusDisplay)
         status_widget.status = "DISCONNECTED"
         self.append_to_log(f"Serial Disconnected: {error_msg}", is_system=True)
+        self.notify(f"Serial disconnected: {error_msg}", severity="error")
         if self.ser:
             try:
                 self.ser.close()
@@ -242,14 +355,12 @@ class PII_TUI(App):
         if is_system:
             self.session_log.append(f"[SYS] {text}\n")
             timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
-            log.write(f"[dim gray]{timestamp}[/] [bold yellow]{text}[/bold yellow]")
+            log.write(f"[dim #A9B1D6]{timestamp}[/] [bold yellow]{text}[/bold yellow]")
             if self.auto_scroll:
                 log.scroll_end(animate=False)
             return
 
-        # For normal text, save to shadow buffer
         self.session_log.append(text)
-        
         self._rx_buffer += text
         
         if self.hex_view:
@@ -258,13 +369,13 @@ class PII_TUI(App):
                 self._rx_buffer = self._rx_buffer[16:]
                 hex_str = " ".join(f"{ord(c):02X}" for c in chunk)
                 ascii_str = "".join(c if 32 <= ord(c) <= 126 else "." for c in chunk)
-                log.write(f"[magenta]{hex_str:<47}[/magenta] | [green]{ascii_str}[/green]")
+                log.write(f"[magenta]{hex_str:<47}[/magenta] | [#9ECE6A]{ascii_str}[/#9ECE6A]")
         else:
             self._rx_buffer = self._rx_buffer.replace('\r', '\n')
             while '\n' in self._rx_buffer:
                 line, self._rx_buffer = self._rx_buffer.split('\n', 1)
                 escaped_line = line.replace("[", "[[").replace("]", "]]")
-                formatted_line = escaped_line.replace("X", "[bold white on red]X[/bold white on red]")
+                formatted_line = escaped_line.replace("X", "[bold white on #F7768E]X[/bold white on #F7768E]")
                 log.write(formatted_line)
 
         if self.auto_scroll:
@@ -275,23 +386,18 @@ class PII_TUI(App):
         """Send the whole string to the FPGA when Enter is pressed."""
         text = event.value
         if text:
-            # Update history
             if not self.history or self.history[-1] != text:
                 self.history.append(text)
             self.history_idx = -1
-            
             self.query_one("#input_field").value = ""
             
-            # Write a timestamped entry for our own message 
             timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
             log = self.query_one("#output_log", RichLog)
-            log.write(f"[dim gray]{timestamp}[/] [bold cyan]fpga-guard>[/] {text}")
+            log.write(f"[dim #A9B1D6]{timestamp}[/] [bold #7AA2F7]fpga-guard>[/] {text}")
             if self.auto_scroll:
                 log.scroll_end(animate=False)
             
-            # Append tx entry to shadow buffer
             self.session_log.append(f"\n[TX] {text}\n")
-            
             self.send_to_fpga(text)
 
     def on_key(self, event: Key) -> None:
@@ -335,6 +441,7 @@ class PII_TUI(App):
         self.query_one("#status_display", StatusDisplay).bytes_sent = 0
         self.query_one("#status_display", StatusDisplay).bytes_received = 0
         self._rx_buffer = ""
+        self.notify("Log and statistics cleared.")
 
     def action_save_log(self) -> None:
         """Save the current log to the output directory using the shadow buffer."""
@@ -347,30 +454,32 @@ class PII_TUI(App):
         try:
             with open(filename, "w") as f:
                 f.write("".join(self.session_log))
-            self.append_to_log(f"Session completely exported to {filename}", is_system=True)
+            self.notify(f"Log exported to {filename}", title="Success")
         except Exception as e:
-            self.append_to_log(f"Failed to export session: {e}", is_system=True)
+            self.notify(f"Export failed: {e}", severity="error")
 
     def action_toggle_autoscroll(self) -> None:
         self.auto_scroll = not self.auto_scroll
         self.query_one("#status_display", StatusDisplay).auto_scroll = self.auto_scroll
-        state = "ON" if self.auto_scroll else "OFF"
-        self.append_to_log(f"Auto-scroll {state}", is_system=True)
+        self.query_one("#scroll_switch", Switch).value = self.auto_scroll
+        state = "enabled" if self.auto_scroll else "disabled"
+        self.notify(f"Auto-scroll {state}.")
 
     def action_toggle_hex(self) -> None:
         self.hex_view = not self.hex_view
         self.query_one("#status_display", StatusDisplay).hex_view = self.hex_view
-        
-        # Flush buffer before switching mode
+        self.query_one("#hex_switch", Switch).value = self.hex_view
         self._rx_buffer = ""
-        
-        state = "ON" if self.hex_view else "OFF"
-        self.append_to_log(f"Hex View {state}", is_system=True)
+        state = "enabled" if self.hex_view else "disabled"
+        self.notify(f"Hex view {state}.")
 
     def action_reconnect(self) -> None:
         if self.ser and self.ser.is_open:
-            self.append_to_log("Already connected.", is_system=True)
-            return
+            try:
+                self.ser.close()
+            except:
+                pass
+            self.ser = None
             
         status_widget = self.query_one("#status_display", StatusDisplay)
         try:
@@ -380,8 +489,8 @@ class PII_TUI(App):
             self.read_from_serial()
         except Exception as e:
             status_widget.status = "MOCK"
-            self.append_to_log(f"Connection failed: {e}", is_system=True)
-            self.append_to_log("Running in Mock Mode (No FPGA detected). Press 'r' to retry.", is_system=True)
+            self.append_to_log(f"Hardware connection failed: {e}", is_system=True)
+            self.notify(f"Connection failed: {e}. Falling back to Mock Mode.", severity="warning")
             self.ser = None
 
     def action_help(self) -> None:
@@ -396,7 +505,7 @@ class PII_TUI(App):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="PII Guard TUI")
-    parser.add_argument("--port", default="/dev/ttyUSB1", help="Serial port (e.g. /dev/ttyS3 for COM3)")
+    parser.add_argument("--port", default="/dev/ttyUSB1", help="Serial port")
     args = parser.parse_args()
     
     app = PII_TUI(port=args.port)
