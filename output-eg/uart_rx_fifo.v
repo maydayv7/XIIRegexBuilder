@@ -2,7 +2,7 @@
 
 
 module uart_rx_fifo #(
-    parameter DEPTH_LOG2 = 4        // depth = 2^DEPTH_LOG2 = 16
+    parameter DEPTH_LOG2 = 10        // depth = 2^DEPTH_LOG2 = 1024
 )(
     input  wire       clk,
     input  wire       rst,

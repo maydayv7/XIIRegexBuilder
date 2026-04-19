@@ -4,28 +4,30 @@ module dynamic_nfa #(
     parameter MAX_STATES = 16,
     parameter ALPHABET_SIZE = 128
 )(
-    input clk,
-    input reset,
-    input en,
-    input restart,    // Reset NFA to State 0
-    input [7:0] char_in,
-
+    input wire clk,
+    input wire reset,
+    input wire en,
+    input wire restart,
+    input wire [7:0] char_in,
+    
     // Programming Interface
-    input prog_en,
-    input [3:0] prog_state_id,
-    input [6:0] prog_char,
-    input [15:0] prog_mask,
-    input [15:0] prog_accept_mask_in,
-    input prog_accept_en,
-
-    output match_out,
-    output ready      // High if NFA is in IDLE and ready for next char
+    input wire prog_en,
+    input wire [3:0] prog_state_id,
+    input wire [6:0] prog_char,
+    input wire [15:0] prog_mask,
+    input wire [15:0] prog_accept_mask_in,
+    input wire prog_accept_en,
+    
+    output wire match_out,
+    output wire ready
 );
 
-    // Memory: 16 states * 128 characters
-    reg [MAX_STATES-1:0] trans_ram [0:MAX_STATES-1][0:ALPHABET_SIZE-1];
-    reg [MAX_STATES-1:0] accept_mask;
-    reg [MAX_STATES-1:0] current_states;
+    // Memory: 16 states * 128 characters = 2048 entries
+    (* ram_style = "block" *)
+    reg [15:0] trans_ram [0:2047];
+    
+    reg [15:0] accept_mask;
+    reg [15:0] current_states;
 
     // FSM States
     localparam IDLE    = 2'd0;
@@ -38,39 +40,38 @@ module dynamic_nfa #(
     reg [15:0] next_states_accum;
     reg [15:0] ram_read_data;
 
-    integer s, c;
     initial begin
-        for (s = 0; s < MAX_STATES; s = s + 1) begin
-            for (c = 0; c < ALPHABET_SIZE; c = c + 1) begin
-                trans_ram[s][c] = 16'd0;
-            end
-        end
-        accept_mask = 16'd0;
-        current_states = 16'd1; // State 0 active
         state = IDLE;
+        current_states = 16'h1;
+        accept_mask = 16'h0;
+        read_idx = 0;
+        accum_idx = 0;
+        next_states_accum = 0;
+        ram_read_data = 0;
     end
 
-    // BRAM Read Block
+    // BRAM Port
+    wire [10:0] bram_addr = {read_idx[3:0], char_in[6:0]};
+    wire [10:0] write_addr = {prog_state_id, prog_char};
+
     always @(posedge clk) begin
         if (prog_en) begin
-            trans_ram[prog_state_id][prog_char] <= prog_mask;
+            trans_ram[write_addr] <= prog_mask;
         end
-        if (state == PROCESS) begin
-            ram_read_data <= trans_ram[read_idx[3:0]][char_in[6:0]];
-        end
+        ram_read_data <= trans_ram[bram_addr];
     end
 
-    // State Machine Block
+    // FSM and Logic Block - Synchronous Reset
     always @(posedge clk) begin
         if (reset) begin
             state <= IDLE;
-            current_states <= 16'd1;
-            // Do NOT wipe accept_mask here, it is programmed
+            current_states <= 16'h1;
+            accept_mask <= 16'h0;
             read_idx <= 0;
             accum_idx <= 0;
             next_states_accum <= 0;
         end else if (restart) begin
-            current_states <= 16'd1;
+            current_states <= 16'h1;
             state <= IDLE;
         end else if (prog_accept_en) begin
             accept_mask <= prog_accept_mask_in;
@@ -95,7 +96,7 @@ module dynamic_nfa #(
                             next_states_accum <= next_states_accum | ram_read_data;
                         end
                         
-                        if (accum_idx == MAX_STATES - 1) begin
+                        if (accum_idx == 5'd15) begin
                             state <= FINISH;
                         end
                         
@@ -113,7 +114,7 @@ module dynamic_nfa #(
         end
     end
 
-    assign match_out = (current_states & accept_mask) != 0;
+    assign match_out = (current_states & accept_mask) != 16'h0;
     assign ready = (state == IDLE);
 
 endmodule
