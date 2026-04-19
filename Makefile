@@ -23,9 +23,9 @@ BUILD_DIR = build
 TARGET = $(BUILD_DIR)/regex_builder$(EXE)
 TESTER = $(BUILD_DIR)/nfa_tester$(EXE)
 GOLDEN = $(BUILD_DIR)/golden$(EXE)
-SRCS = src/main.cpp src/lexer.cpp src/parser.cpp src/nfa.cpp src/emitter.cpp
-TEST_SRCS = src/parser_tester.cpp src/lexer.cpp src/parser.cpp src/nfa.cpp
-GOLDEN_SRCS = src/golden.cpp
+SRCS = src/main.cpp src/lexer.cpp src/parser.cpp src/nfa.cpp src/table_gen.cpp
+TEST_SRCS = src/lexer.cpp src/parser.cpp src/nfa.cpp
+GOLDEN_SRCS =
 OBJS = $(SRCS:.cpp=.o)
 TEST_OBJS = $(TEST_SRCS:.cpp=.o)
 GOLDEN_OBJS = $(GOLDEN_SRCS:.cpp=.o)

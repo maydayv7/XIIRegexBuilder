@@ -8,7 +8,7 @@
 #include "lexer.h"
 #include "parser.h"
 #include "nfa.h"
-#include "emitter.h"
+#include "table_gen.h"
 
 std::string trim(const std::string& str) {
     size_t first = str.find_first_not_of(" \t\r\n");
@@ -41,14 +41,18 @@ int main(int argc, char* argv[]) {
     int lineNum = 0;
     int regexIdx = 0;
     std::vector<std::unique_ptr<NFA>> nfas;
-    std::vector<std::string> rawRegexes;
 
-    std::cout << "Starting XIIRegexBuilder pipeline..." << std::endl;
+    std::cout << "Starting XIIRegexBuilder pipeline (Dynamic NFA Table Generation)..." << std::endl;
 
     while (std::getline(regexFile, line)) {
         lineNum++;
         std::string trimmedLine = trim(line);
         if (trimmedLine.empty() || trimmedLine[0] == '#') continue;
+
+        if (regexIdx >= 1) {
+            std::cout << "Skipping regex at line " << lineNum << ": Only 1 regex supported in dynamic mode." << std::endl;
+            continue;
+        }
 
         std::cout << "Processing Regex [" << regexIdx << "]: " << trimmedLine << std::endl;
 
@@ -60,8 +64,7 @@ int main(int argc, char* argv[]) {
             auto nfa = NFABuilder::build(ast.get(), regexIdx);
             if (nfa) {
                 nfas.push_back(std::move(nfa));
-                rawRegexes.push_back(trimmedLine);
-                regexIdx++; // Increment only on success
+                regexIdx++;
             }
         } catch (const std::exception& e) {
             std::cerr << "Error parsing regex: " << e.what() << std::endl;
@@ -73,47 +76,13 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    std::vector<std::string> testStrings;
-    std::vector<std::string> expectedMatches;
-
-    if (!testFilename.empty()) {
-        std::ifstream testFile(testFilename);
-        if (testFile.is_open()) {
-            std::string tline;
-            while (std::getline(testFile, tline)) {
-                size_t last = tline.find_last_not_of("\r\n");
-                std::string s = (last != std::string::npos) ? tline.substr(0, last + 1) : (tline.empty() ? "" : tline);
-                
-                // Skip comments and truly blank lines
-                if (!s.empty() && s[0] == '#') continue;
-                if (s.empty() && trim(tline).empty()) continue;
-
-                testStrings.push_back(s);
-                
-                // Generate expected matches using std::regex
-                std::string mask = "";
-                for (const auto& re_str : rawRegexes) {
-                    bool match = false;
-                    try {
-                        std::regex re(re_str);
-                        match = std::regex_match(s, re);
-                    } catch (...) {}
-                    mask += (match ? "1" : "0");
-                }
-                std::reverse(mask.begin(), mask.end());
-                expectedMatches.push_back(mask);
-            }
-            std::cout << "Loaded " << testStrings.size() << " test strings and generated golden matches." << std::endl;
-        }
-    }
-
-    std::cout << "Generated " << nfas.size() << " NFAs. Emitting Verilog..." << std::endl;
+    std::cout << "Generated " << nfas.size() << " NFA. Generating binary table..." << std::endl;
 
     try {
-        Emitter::emit(nfas, outputDir, testStrings, expectedMatches);
-        std::cout << "Pipeline complete. Verilog files emitted to '" << outputDir << "/'" << std::endl;
+        TableGen::generate(nfas, outputDir);
+        std::cout << "Pipeline complete. Binary table generated in '" << outputDir << "/'" << std::endl;
     } catch (const std::exception& e) {
-        std::cerr << "Error during Verilog emission: " << e.what() << std::endl;
+        std::cerr << "Error during table generation: " << e.what() << std::endl;
         return 1;
     }
 
