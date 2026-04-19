@@ -1,0 +1,1 @@
+"tb_dynamic_core" -s "tb_sim" 

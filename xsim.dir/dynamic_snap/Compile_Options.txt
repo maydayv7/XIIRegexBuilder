@@ -1,0 +1,1 @@
+-debug "typical" -top "tb_dynamic_core" -snapshot "dynamic_snap" 

@@ -39,6 +39,7 @@ module top_fpga #(
 
     // NFA Engine
     reg nfa_en = 0;
+    reg nfa_restart = 0;
     reg [7:0] nfa_char_in = 0;
     reg prog_en = 0;
     reg [3:0] prog_state_id = 0;
@@ -47,6 +48,7 @@ module top_fpga #(
     reg [15:0] prog_accept_mask_in = 0;
     reg prog_accept_en = 0;
     wire match_out;
+    wire nfa_ready;
 
     dynamic_nfa #(
         .MAX_STATES(16),
@@ -55,6 +57,7 @@ module top_fpga #(
         .clk(clk),
         .reset(rst_btn),
         .en(nfa_en),
+        .restart(nfa_restart),
         .char_in(nfa_char_in),
         .prog_en(prog_en),
         .prog_state_id(prog_state_id),
@@ -62,7 +65,8 @@ module top_fpga #(
         .prog_mask(prog_mask),
         .prog_accept_mask_in(prog_accept_mask_in),
         .prog_accept_en(prog_accept_en),
-        .match_out(match_out)
+        .match_out(match_out),
+        .ready(nfa_ready)
     );
 
     assign match_leds = {15'd0, match_out};
@@ -98,6 +102,7 @@ module top_fpga #(
     always @(posedge clk) begin
         fifo_rd_en <= 1'b0;
         nfa_en     <= 1'b0;
+        nfa_restart <= 1'b0;
         prog_en    <= 1'b0;
         prog_accept_en <= 1'b0;
         tx_start_r <= 1'b0;
@@ -108,7 +113,8 @@ module top_fpga #(
         end else begin
             case (state)
                 S_IDLE: begin
-                    if (!fifo_empty) begin
+                    // ONLY fetch if the NFA is actually ready for a new character
+                    if (!fifo_empty && nfa_ready) begin 
                         fifo_rd_en <= 1'b1;
                         state <= S_FETCH;
                     end
@@ -119,15 +125,23 @@ module top_fpga #(
                 S_DECODE: begin
                     if (fifo_rd_data == 8'hFE) begin
                         state <= S_PROG_HDR;
+                    end else if (fifo_rd_data == 8'h0A || fifo_rd_data == 8'h0D) begin // \n or \r
+                        // String is over. Trigger restart to reset NFA back to State 0
+                        nfa_restart <= 1'b1;
+                        state <= S_IDLE;
                     end else begin
                         nfa_char_in <= fifo_rd_data;
+                        nfa_en <= 1'b1; // Pulse EN
                         state <= S_EXEC_STEP;
                     end
                 end
 
                 S_EXEC_STEP: begin
-                    nfa_en <= 1'b1;
-                    state  <= S_IDLE;
+                    nfa_en <= 1'b0; // Drop EN
+                    // Wait until NFA drops the ready flag and finishes
+                    if (nfa_ready) begin
+                        state <= S_IDLE;
+                    end
                 end
 
                 S_PROG_HDR: begin

@@ -5,6 +5,7 @@ module tb_dynamic_core;
     reg clk;
     reg reset;
     reg en;
+    reg restart;
     reg [7:0] char_in;
     
     reg prog_en;
@@ -15,6 +16,7 @@ module tb_dynamic_core;
     reg prog_accept_en;
     
     wire match_out;
+    wire ready;
 
     dynamic_nfa #(
         .MAX_STATES(16),
@@ -23,6 +25,7 @@ module tb_dynamic_core;
         .clk(clk),
         .reset(reset),
         .en(en),
+        .restart(restart),
         .char_in(char_in),
         .prog_en(prog_en),
         .prog_state_id(prog_state_id),
@@ -30,7 +33,8 @@ module tb_dynamic_core;
         .prog_mask(prog_mask),
         .prog_accept_mask_in(prog_accept_mask_in),
         .prog_accept_en(prog_accept_en),
-        .match_out(match_out)
+        .match_out(match_out),
+        .ready(ready)
     );
 
     always #5 clk = ~clk;
@@ -39,6 +43,7 @@ module tb_dynamic_core;
         clk = 0;
         reset = 1;
         en = 0;
+        restart = 0;
         char_in = 0;
         prog_en = 0;
         prog_state_id = 0;
@@ -81,13 +86,13 @@ module tb_dynamic_core;
         @(posedge clk);
         en <= 1;
         char_in <= "a";
-        @(posedge clk);
-        #1; // Wait a bit for async match_out to settle
+        // WAIT FOR THE 18-CYCLE MULTIPLEXER TO FINISH
+        repeat (20) @(posedge clk); 
         $display("Char: 'a', Match: %b", match_out);
         
         char_in <= "b";
-        @(posedge clk);
-        #1;
+        // WAIT FOR THE 18-CYCLE MULTIPLEXER TO FINISH
+        repeat (20) @(posedge clk); 
         $display("Char: 'b', Match: %b", match_out);
         
         if (match_out === 1'b1)
@@ -104,13 +109,11 @@ module tb_dynamic_core;
         @(posedge clk);
         en <= 1;
         char_in <= "a";
-        @(posedge clk);
-        #1;
+        repeat (20) @(posedge clk); 
         $display("Char: 'a', Match: %b", match_out);
         
         char_in <= "c";
-        @(posedge clk);
-        #1;
+        repeat (20) @(posedge clk); 
         $display("Char: 'c', Match: %b", match_out);
         
         if (match_out === 1'b0)

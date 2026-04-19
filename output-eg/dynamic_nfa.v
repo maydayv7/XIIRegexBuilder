@@ -7,8 +7,9 @@ module dynamic_nfa #(
     input clk,
     input reset,
     input en,
+    input restart,    // Reset NFA to State 0
     input [7:0] char_in,
-    
+
     // Programming Interface
     input prog_en,
     input [3:0] prog_state_id,
@@ -16,8 +17,9 @@ module dynamic_nfa #(
     input [15:0] prog_mask,
     input [15:0] prog_accept_mask_in,
     input prog_accept_en,
-    
-    output match_out
+
+    output match_out,
+    output ready      // High if NFA is in IDLE and ready for next char
 );
 
     // Memory: 16 states * 128 characters
@@ -49,7 +51,6 @@ module dynamic_nfa #(
     end
 
     // BRAM Read Block
-    // Inferred as Block RAM in Vivado
     always @(posedge clk) begin
         if (prog_en) begin
             trans_ram[prog_state_id][prog_char] <= prog_mask;
@@ -64,10 +65,13 @@ module dynamic_nfa #(
         if (reset) begin
             state <= IDLE;
             current_states <= 16'd1;
-            accept_mask <= 16'd0;
+            // Do NOT wipe accept_mask here, it is programmed
             read_idx <= 0;
             accum_idx <= 0;
             next_states_accum <= 0;
+        end else if (restart) begin
+            current_states <= 16'd1;
+            state <= IDLE;
         end else if (prog_accept_en) begin
             accept_mask <= prog_accept_mask_in;
         end else begin
@@ -82,23 +86,20 @@ module dynamic_nfa #(
                 end
 
                 PROCESS: begin
-                    // Increment read_idx to fetch next word
-                    read_idx <= read_idx + 1;
-                    
-                    // The synchronous RAM read has 1 cycle latency.
-                    // When read_idx > 0, ram_read_data contains data for (read_idx - 1),
-                    // which corresponds to our current accum_idx.
+                    // Address for next cycle
+                    read_idx <= read_idx + 5'd1;
+
+                    // Accumulate data from previous cycle's address
                     if (read_idx > 5'd0) begin
                         if (current_states[accum_idx[3:0]]) begin
                             next_states_accum <= next_states_accum | ram_read_data;
                         end
                         
-                        // Check if we just processed the last state
                         if (accum_idx == MAX_STATES - 1) begin
                             state <= FINISH;
                         end
                         
-                        accum_idx <= accum_idx + 1;
+                        accum_idx <= accum_idx + 5'd1;
                     end
                 end
 
@@ -113,5 +114,6 @@ module dynamic_nfa #(
     end
 
     assign match_out = (current_states & accept_mask) != 0;
+    assign ready = (state == IDLE);
 
 endmodule

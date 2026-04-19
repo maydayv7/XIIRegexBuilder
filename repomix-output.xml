@@ -1,0 +1,6169 @@
+This file is a merged representation of the entire codebase, combined into a single document by Repomix.
+
+<file_summary>
+This section contains a summary of this file.
+
+<purpose>
+This file contains a packed representation of the entire repository's contents.
+It is designed to be easily consumable by AI systems for analysis, code review,
+or other automated processes.
+</purpose>
+
+<file_format>
+The content is organized as follows:
+1. This summary section
+2. Repository information
+3. Directory structure
+4. Repository files (if enabled)
+5. Multiple file entries, each consisting of:
+  - File path as an attribute
+  - Full contents of the file
+</file_format>
+
+<usage_guidelines>
+- This file should be treated as read-only. Any changes should be made to the
+  original repository files, not this packed version.
+- When processing this file, use the file path to distinguish
+  between different files in the repository.
+- Be aware that this file may contain sensitive information. Handle it with
+  the same level of security as you would the original repository.
+</usage_guidelines>
+
+<notes>
+- Some files may have been excluded based on .gitignore rules and Repomix's configuration
+- Binary files are not included in this packed representation. Please refer to the Repository Structure section for a complete list of file paths, including binary files
+- Files matching patterns in .gitignore are excluded
+- Files matching default ignore patterns are excluded
+- Files are sorted by Git change count (files with more changes are at the bottom)
+</notes>
+
+</file_summary>
+
+<directory_structure>
+docs/
+  details.md
+  specifications.md
+  usecases.md
+inputs/
+  regexes.txt
+  test_strings.txt
+output-eg/
+  xsim.dir/
+    phase3_sim/
+      Compile_Options.txt
+      xsim_script.tcl
+      xsim.dbg
+      xsim.mem
+      xsim.reloc
+      xsim.rtti
+      xsim.svtype
+      xsim.type
+      xsim.version
+      xsim.xdbg
+      xsimk
+      xsimSettings.ini
+    work/
+      dynamic_nfa.sdb
+      tb_phase3.sdb
+      top_fpga.sdb
+      uart_rx_fifo.sdb
+      uart_rx.sdb
+      uart_tx.sdb
+      work.rlx
+    xsim.version
+  constraints.xdc
+  dynamic_nfa.v
+  nfa_0.v
+  nfa_1.v
+  nfa_2.v
+  nfa_3.v
+  nfa_4.v
+  nfa_5.v
+  tb_dynamic_core.v
+  tb_phase3.v
+  tb_top.v
+  top_fpga.v
+  top.v
+  uart_rx_fifo.v
+  uart_rx.v
+  uart_tx.v
+scripts/
+  program.tcl
+  synth.tcl
+src/
+  lexer.cpp
+  lexer.h
+  main.cpp
+  nfa.cpp
+  nfa.h
+  parser.cpp
+  parser.h
+  table_gen.cpp
+  table_gen.h
+.gitignore
+dump.vcd
+Makefile
+README.md
+tui.py
+</directory_structure>
+
+<files>
+This section contains the contents of the repository's files.
+
+<file path="docs/details.md">
+# Stage 1 — C++ Regex Parser
+
+This stage is responsible for transforming a raw regular expression string into an Abstract Syntax Tree (AST) that can be processed by the NFA construction stage.
+
+---
+
+## 1. Lexer Details
+
+### Overview
+
+The lexer is the first component. Its primary responsibility is to read a raw regular expression string character-by-character and transform it into a sequence of typed tokens. This abstraction simplifies the downstream parsing process by handling character-level concerns like literal character validation and metacharacter identification.
+
+### Token Types
+
+The lexer identifies the following token types:
+
+| Token Type     | Representation               | Description                                         |
+| -------------- | ---------------------------- | --------------------------------------------------- |
+| `LITERAL`      | Any printable ASCII (32–126) | Represents a literal character match.               |
+| `DOT`          | `.`                          | Matches any single character.                       |
+| `STAR`         | `*`                          | Kleene star: zero or more repetitions.              |
+| `PLUS`         | `+`                          | One or more repetitions.                            |
+| `QUESTION`     | `?`                          | Optional: zero or one occurrence.                   |
+| `PIPE`         | `\|`                         | Union / Alternation operator.                       |
+| `LPAREN`       | `(`                          | Start of a subexpression group.                     |
+| `RPAREN`       | `)`                          | End of a subexpression group.                       |
+| `END_OF_INPUT` | `\0`                         | Sentinel token marking the end of the regex string. |
+
+### Input Processing Rules
+
+1. **Character Filtering:** Only printable ASCII characters (codes 32–126) are allowed. Non-printable characters are reported by their numeric code in error messages.
+2. **Coordinate Tracking:** Each token records its `line` and `column` number for precise error reporting.
+3. **Implicit Concatenation:** The lexer treats characters as discrete units. The parser handles the logic of implicit concatenation.
+4. **Metacharacter Recognition:** Characters like `*`, `+`, `?`, `|`, `(`, `)`, and `.` are immediately recognised as their respective operator tokens.
+
+---
+
+## 2. Parser Details
+
+### Overview
+
+The parser consumes the token stream produced by the lexer and constructs an Abstract Syntax Tree (AST). It uses a **recursive descent** approach and strictly enforces operator precedence.
+
+### Grammar and Precedence
+
+The parser implements the following grammar (highest to lowest precedence):
+
+1. **Atom:** The basic building blocks (Literal, Dot, or a Parenthesised Expression).
+2. **Factor:** An Atom optionally followed by a quantifier (`*`, `+`, or `?`).
+3. **Term:** One or more concatenated Factors.
+4. **Expression:** One or more Terms separated by the union operator (`|`).
+
+### AST Node Structure
+
+The parser produces a tree composed of various node types (Literal, Dot, Concatenation, Union, Star, Plus, Optional).
+
+**Important Design Note:** While the base `ASTNode` class contains fields for `nullable`, `firstpos`, and `lastpos`, these are **not** populated by the parser. They are reserved for and populated by the **Stage 2 — NFA Builder**.
+
+### Error Handling
+
+The parser detects and reports the following errors with meaningful messages including line and column numbers:
+
+- **Unmatched Parentheses:** e.g., `(a|b`.
+- **Quantifier applied to nothing:** e.g., `*abc` or `(+a)`.
+- **Empty alternation branch:** Both left-side (e.g., `|abc`) and right-side (e.g., `abc|`) are explicitly detected.
+- **Unexpected Tokens:** Tokens that don't fit the expected grammar at the current position.
+
+---
+
+## Stage 2 — NFA Construction
+
+This stage converts the Abstract Syntax Tree (AST) into an ε-free Non-deterministic Finite Automaton (NFA) using Glushkov's algorithm.
+
+---
+
+### 1. Glushkov's Algorithm
+
+The algorithm produces an NFA with exactly $n+1$ states, where $n$ is the number of symbol occurrences (literals or dots) in the regex.
+
+#### Construction Steps:
+
+1. **Linearization:** Each symbol is assigned a unique integer position (1 to $n$).
+2. **Nullable:** Computes if a sub-expression can match the empty string.
+3. **Firstpos:** The set of positions that can match the first character of a string.
+4. **Lastpos:** The set of positions that can match the last character of a string.
+5. **Followpos:** A map where for each position $p$, it stores the set of positions that can immediately follow it.
+6. **Transitions:**
+   - State 0 is the start state.
+   - Transitions from state 0 go to all positions in `firstpos` of the root.
+   - Transitions from state $p$ go to all positions in `followpos(p)`.
+
+### 2. Global State Numbering
+
+To facilitate Stage 3 (Verilog Emitter), every NFA state across all input regular expressions is assigned a **globally unique ID**. This ensures that multiple FSM modules can be instantiated in a single Verilog project without identifier collisions.
+
+### 3. Dot Operator Handling
+
+The dot (`.`) matches any character. In the NFA, a dot position generates 256 individual transition arcs for every possible byte value (0–255). This ensures the hardware matcher correctly identifies any character in that position.
+
+---
+
+## Validation and Simulation
+
+To ensure the integrity of the regex-to-NFA conversion before hardware generation, the builder includes an optional simulation engine.
+
+### 1. NFA Simulation
+
+The `NFA::simulate` method implements a software-based FSM runner:
+
+- It tracks the set of active states simultaneously (handling non-determinism).
+- It consumes the input string character-by-character.
+- It returns `true` if any final active state is an acceptance state.
+
+## Stage 3 — Verilog Emitter
+
+This stage transforms the internal NFA structures into synthesisable Verilog HDL code.
+
+### 1. Per-NFA Modules
+
+For each regular expression, the emitter generates a self-contained Verilog module (`nfa_N.v`):
+
+- **File I/O:** All file and directory operations use the C++17 `<filesystem>` library for cross-platform compatibility and improved error handling. File streams are configured to throw exceptions on failure, providing detailed system-level error messages (e.g., "Permission denied").
+- **Robustness:** The emitter validates its inputs before generating code. It will skip emission if no valid NFAs are provided and will throw an error if the golden reference data does not match the number of NFAs, preventing the generation of invalid Verilog.
+- **One-Hot Encoding:** The state register uses one-hot encoding (one flip-flop per NFA state). This is ideal for FPGA implementation as it results in high-speed, shallow combinational logic.
+- **Optimised Next-State Logic:** Transitions are implemented as pure combinational logic. To improve generation speed, the logic is built by iterating over destination states rather than source states.
+- **Deterministic Output:** Global state IDs are sorted during emission to ensure consistent and deterministic Verilog code generation.
+- **Match Logic:** The `match` output is registered. The logic uses a Verilog OR-reduction (`|{...}`) for a concise and efficient way to check if any of the final accept states are active.
+
+### 2. Top-Level Wrapper
+
+A `top.v` module is generated to instantiate all NFA modules in parallel.
+
+- All modules share the same clock, reset, and input character stream.
+- The results are aggregated into a `match_bus` where each bit corresponds to one regular expression (Regex $k$ maps to `match_bus[k]`).
+
+### 3. Simulation Testbench
+
+A fully functional testbench (`tb_top.v`) is generated:
+
+- It automatically loads test cases from `test_strings.txt`.
+- It integrates **Golden Reference** matches generated via `std::regex`.
+- For each test string, it drives the `start`, `char_in`, and `end_of_str` signals with correct, deterministic timing. The testbench samples the registered `match` output on the exact clock cycle it becomes valid (the cycle immediately following the assertion of `end_of_str`), explicitly avoiding race conditions and double-sampling bugs.
+- It reports `PASS` or `FAIL` for each test case directly in the simulation console and generates a `dump.vcd` for waveform analysis.
+
+---
+
+## Stage 4 — FPGA Integration (Hardware I/O)
+
+This stage connects the Verilog regex engine to the physical FPGA I/O: a USB-UART serial link for bidirectional communication with a host PC. Three new hardware modules are added.
+
+---
+
+### 4.1 UART Transmitter (`uart_tx.v`)
+
+A standard 8-N-1 UART transmitter with a 4-state FSM:
+
+| State         | Action                                            |
+| ------------- | ------------------------------------------------- |
+| `S_IDLE`      | Line held high; waits for `tx_start` pulse        |
+| `S_START_BIT` | Drives line low for exactly `CLKS_PER_BIT` cycles |
+| `S_DATA_BITS` | Clocks out 8 data bits, LSB first                 |
+| `S_STOP_BIT`  | Drives line high for `CLKS_PER_BIT` cycles        |
+
+The `tx_busy` output is held high for the entire duration of a transmission. The caller (the TX serializer in `top_fpga.v`) must not assert `tx_start` while `tx_busy` is high.
+
+Default baud rate: 115200 at 100 MHz clock (`CLKS_PER_BIT = 868`), configurable via a Verilog parameter.
+
+---
+
+### 4.2 Input FIFO Buffer (`uart_rx_fifo.v`)
+
+A 16-entry × 8-bit circular FIFO sits between `uart_rx` and the NFA control FSM. This decouples the UART receiver from the NFA pipeline so that incoming bytes are never dropped during the multi-cycle end-of-string and TX response sequence.
+
+- **Architecture:** Power-of-two depth (configurable via `DEPTH_LOG2` parameter, default 4 → 16 entries). Inferred as distributed RAM (Xilinx SRL16/LUTRAM) on a 7-series device.
+- **Write side:** Driven by `uart_rx.rx_ready`; silently discards bytes when full (overflow protection).
+- **Read side:** Consumed one byte per cycle by the control FSM.
+- **Status flags:** `full` and `empty` are combinationally derived from a `count` register to avoid the grey-code synchronisation complexity that arises with dual-clock designs (this FIFO is single-clock).
+
+---
+
+### 4.3 Updated `top_fpga.v` — Control FSM and TX Serializer
+
+`top_fpga.v` replaces the previous single-byte latch (`rx_latched_data` / `rx_pending`) with the FIFO-backed architecture and adds two new FSMs.
+
+#### Main Control FSM (12 states)
+
+```
+S_IDLE  ──► S_FETCH ──► S_DECODE ──► S_CHAR_LOAD ──► S_CHAR_STEP ──► S_IDLE
+                             │
+                             ├── (newline) ──► S_EOL_END ──► S_EOL_MATCH
+                             │                    ──► S_EOL_LATCH ──► S_TX_ARM
+                             │                    ──► S_TX_WAIT ──► S_RESET_NFA
+                             │
+                             └── ('?') ──► S_QUERY_TX ──► S_TX_WAIT
+```
+
+- `S_IDLE` / `S_FETCH` / `S_DECODE`: pop the FIFO and classify the byte.
+- `S_CHAR_LOAD` / `S_CHAR_STEP`: feed one character into the NFA; increment `byte_count`.
+- `S_EOL_END` / `S_EOL_MATCH` / `S_EOL_LATCH`: assert `end_of_str`, clock the match flip-flops, capture `match_bus`, update `match_count[k]` for every matched regex, and latch the result to `match_leds`.
+- `S_TX_ARM`: call the `build_response` task to serialise the ASCII response into the TX buffer; pulse `tx_send`.
+- `S_TX_WAIT`: wait for the TX drain sub-FSM to finish before resetting the NFA.
+- `S_RESET_NFA`: assert `nfa_start + nfa_en` for one cycle to re-initialise all NFA FSMs.
+- `S_QUERY_TX`: handle the `?` command — build a counter snapshot and transmit without feeding any character to the NFA.
+
+#### TX Drain Sub-FSM (4 states)
+
+A separate small FSM drains the ASCII TX buffer byte-by-byte through `uart_tx`:
+
+```
+TX_IDLE ──► TX_LOAD ──► TX_WAIT ──► TX_NEXT ──► (TX_LOAD if more bytes, else TX_IDLE)
+```
+
+This sub-FSM runs concurrently with the control FSM, which simply waits in `S_TX_WAIT` until `tx_state == TX_IDLE`.
+
+#### Hardware Counters
+
+| Register         | Width        | Description                                                          |
+| ---------------- | ------------ | -------------------------------------------------------------------- |
+| `byte_count`     | 32 bits      | Total bytes fed to the NFA engine since the last hardware reset      |
+| `match_count[k]` | 16 bits each | Cumulative match events for regex _k_; up to 16 independent counters |
+
+Both are cleared by asserting `rst_btn`. Values are transmitted as part of every response packet.
+
+#### Response Packet Format
+
+```
+MATCH=<N-bit binary> BYTES=<8 hex digits> HITS=<4 hex per regex, comma-separated>\r\n
+```
+
+The `build_response` Verilog task constructs this string in a 128-byte register array at synthesis time (combinational logic mapped to LUTs), then stores it in `tx_buf`. No block RAM is required for the TX buffer.
+
+---
+
+### 4.4 Python TUI (`tui.py`)
+
+A terminal user interface for interactive testing from any host PC.
+
+**Dependencies:** `pip install pyserial rich`
+
+**Usage:**
+
+```bash
+python tui.py --port /dev/ttyUSB0 --regexes inputs/regexes.txt
+```
+
+The port is auto-detected if omitted (first USB-Serial device found).
+
+**Features:**
+
+- Live colour-coded match table: green `● MATCH` / dim red `○ —` per regex.
+- Running totals: total bytes processed and per-regex cumulative hit count.
+- Input history in the prompt.
+- Background reader thread handles FPGA responses without blocking the UI.
+- `?` query support: displays current counters without sending a test string.
+- Graceful exit on `q`, `quit`, or Ctrl-C.
+</file>
+
+<file path="docs/specifications.md">
+# Regex → NFA → Verilog Hardware Matcher
+
+## Project Specification
+
+---
+
+## 1. Project Overview
+
+This project implements a hardware-accelerated regular expression matching pipeline. A set of regular expressions defined in plain text is automatically compiled into parallel hardware finite state machines (FSMs), expressed in Verilog, and synthesised onto an FPGA. At runtime, a stream of ASCII characters is fed into the hardware one character per clock cycle, and the system reports which regular expressions are matched by the full input string.
+
+The pipeline consists of four major stages: regex parsing, NFA construction, Verilog code generation, and hardware simulation and synthesis.
+
+---
+
+## 2. Finalised Design Decisions
+
+| Decision                      | Choice                                                              |
+| ----------------------------- | ------------------------------------------------------------------- |
+| Supported operators           | Kleene star, plus, optional, union, dot, parentheses, literals      |
+| NFA construction algorithm    | Glushkov's construction                                             |
+| Architecture                  | One independent Verilog FSM module per NFA, all running in parallel |
+| ε-transition handling         | None — Glushkov's construction produces ε-free NFAs directly        |
+| State encoding                | One-hot (one flip-flop per NFA state)                               |
+| Character stream interface    | Synchronous; one 8-bit ASCII character per clock cycle              |
+| Match semantics               | Full match only (the entire input string must satisfy the regex)    |
+| Scale                         | Fewer than 20 regular expressions                                   |
+| Simulation and synthesis tool | Xilinx Vivado                                                       |
+
+---
+
+## 3. Input Specification
+
+### 3.1 Regex Input File
+
+The input is a plain text file, referred to throughout as `regexes.txt`. It obeys the following rules:
+
+- One regular expression per line.
+- Lines beginning with the `#` character are treated as comments and ignored.
+- Blank lines are ignored.
+- Each non-comment, non-blank line is assigned a zero-based index that becomes the index of the corresponding NFA and Verilog module.
+
+### 3.2 Supported Regex Syntax
+
+The following constructs must be supported:
+
+- **Literal characters** — any printable ASCII character (codes 32–126) that is not a metacharacter is matched literally.
+- **Dot** (`.`) — matches any single character.
+- **Kleene star** (`*`) — matches zero or more repetitions of the preceding atom.
+- **Plus** (`+`) — matches one or more repetitions of the preceding atom.
+- **Optional** (`?`) — matches zero or one occurrence of the preceding atom.
+- **Union** (`|`) — matches either the expression on the left or the expression on the right. Union may appear both within a single regex (e.g. between subexpressions) and effectively between entire regex lines via the separate-line structure.
+- **Parentheses** (`(` and `)`) — group subexpressions and control the scope of operators.
+
+The operator precedence from highest to lowest is: `*`, `+`, `?` (postfix quantifiers) → concatenation (implicit) → `|` (union).
+
+Anchors (`^` and `$`) are not supported. Full-match semantics are enforced by the hardware control signals rather than by the regex syntax.
+
+### 3.3 Test String Input File
+
+A second plain text input file provides strings to test against the regex set. Each line is one test string. The test strings are used to drive the hardware simulation testbench and to generate golden reference output.
+
+---
+
+## 4. Stage 1 — C++ Regex Parser
+
+### 4.1 Lexer
+
+The lexer reads a regex string character by character and produces a flat sequence of typed tokens. The token types are: literal character, dot, star, plus, question mark, pipe (union), left parenthesis, and right parenthesis.
+
+### 4.2 Parser
+
+The parser consumes the token stream produced by the lexer and constructs an Abstract Syntax Tree (AST). The parser uses recursive descent and enforces the correct operator precedence. The grammar it implements, informally stated, is:
+
+- An expression is one or more concatenated terms separated by `|`.
+- A term is one or more concatenated factors.
+- A factor is an atom optionally followed by one quantifier (`*`, `+`, or `?`).
+- An atom is either a literal, a dot, or a parenthesised expression.
+
+Each AST node is one of the following types: Literal, Dot, Concatenation, Union, Star, Plus, Optional.
+
+### 4.3 Error Handling
+
+The parser must detect and report, with a meaningful message and line number:
+
+- Unmatched parentheses.
+- A quantifier applied to nothing (e.g. a leading `*`).
+- An empty alternation branch (e.g. `a|`).
+- Any character outside the printable ASCII range.
+
+---
+
+## 5. Stage 2 — C++ NFA Construction (Glushkov's Construction)
+
+### 5.1 Overview
+
+Glushkov's construction is applied to each AST to produce an ε-free NFA. Unlike Thompson's construction, Glushkov's algorithm never introduces ε-transitions. Instead, it works by analysing the positions of symbol occurrences within the regex and computing which positions can follow which others during a match. The resulting NFA has exactly one state per symbol occurrence in the regex, plus one distinguished initial state, and all transitions are labelled with concrete characters.
+
+This ε-free property means the Verilog emitter requires no combinational ε-closure layer — the next-state logic is entirely registered, which simplifies synthesis and removes combinational depth as a timing concern.
+
+### 5.2 Step 1 — Linearisation
+
+Each symbol occurrence in the regex (every literal character and every dot) is assigned a unique integer position label, numbered from 1 upwards, in left-to-right order of appearance. Position 0 is reserved for the special initial state and does not correspond to any symbol. Two occurrences of the same character are treated as distinct positions.
+
+For example, the regex `ab*a` is linearised as `a₁ b₂* a₃`, yielding positions 1, 2, and 3.
+
+### 5.3 Step 2 — Computing Nullable
+
+For each node in the AST, a Boolean property `nullable` is computed, indicating whether the sub-expression rooted at that node can match the empty string. The rules are:
+
+- A Literal or Dot node is never nullable.
+- A Star or Optional node is always nullable.
+- A Plus node is nullable if and only if its inner sub-expression is nullable.
+- A Union node is nullable if either branch is nullable.
+- A Concatenation node is nullable if and only if both sub-expressions are nullable.
+
+### 5.4 Step 3 — Computing Firstpos
+
+For each AST node, `firstpos` is the set of positions that can match the first character of any string accepted by that sub-expression. The rules are:
+
+- A Literal or Dot node at position p has `firstpos = {p}`.
+- A Star, Plus, or Optional node has the same `firstpos` as its inner sub-expression.
+- A Union node has `firstpos` equal to the union of the `firstpos` sets of both branches.
+- A Concatenation node of left and right sub-expressions has `firstpos` equal to the `firstpos` of the left sub-expression, plus the `firstpos` of the right sub-expression if the left sub-expression is nullable.
+
+### 5.5 Step 4 — Computing Lastpos
+
+For each AST node, `lastpos` is the set of positions that can match the last character of any string accepted by that sub-expression. The rules are:
+
+- A Literal or Dot node at position p has `lastpos = {p}`.
+- A Star, Plus, or Optional node has the same `lastpos` as its inner sub-expression.
+- A Union node has `lastpos` equal to the union of the `lastpos` sets of both branches.
+- A Concatenation node of left and right sub-expressions has `lastpos` equal to the `lastpos` of the right sub-expression, plus the `lastpos` of the left sub-expression if the right sub-expression is nullable.
+
+### 5.6 Step 5 — Computing Followpos
+
+For each position p, `followpos(p)` is the set of positions that can immediately follow position p in any match. This set is built by traversing the AST and applying two rules:
+
+- **Concatenation rule:** for every position p in `lastpos` of the left sub-expression of a Concatenation node, add all positions in `firstpos` of the right sub-expression to `followpos(p)`.
+- **Star and Plus rule:** for every position p in `lastpos` of the inner sub-expression of a Star or Plus node, add all positions in `firstpos` of that same inner sub-expression to `followpos(p)`.
+
+All other node types (Union, Optional, Literal, Dot) do not contribute to `followpos` directly.
+
+### 5.7 Step 6 — Building the NFA
+
+With the position functions computed, the NFA is assembled as follows:
+
+- **States:** one state for each position 1 through n (where n is the total number of symbol occurrences), plus state 0 as the initial state.
+- **Start state:** state 0.
+- **Accept states:** all positions in `lastpos` of the root AST node. Additionally, state 0 is an accept state if the root node is nullable (i.e. the regex matches the empty string).
+- **Transitions from state 0:** for each position p in `firstpos` of the root node, add a transition from state 0 on the symbol at position p to state p.
+- **Transitions from state p (p > 0):** for each position q in `followpos(p)`, add a transition from state p on the symbol at position q to state q.
+
+Because dot (`.`) matches any character, transitions labelled with a dot position are expanded to one transition arc per possible input character (all 256 byte values).
+
+### 5.8 NFA Representation
+
+Each NFA is described by a set of numbered states. Each state carries: a unique integer identifier, a Boolean flag indicating whether it is an accept state, and a map from input characters to sets of destination states. There are no ε-transitions. The total number of states for a given regex is exactly equal to the number of symbol occurrences plus one.
+
+### 5.9 Global State Numbering
+
+All NFA states across all N NFAs share a single global numbering space. This avoids identifier collisions when multiple NFAs are emitted into a single Vivado project.
+
+---
+
+## 6. Stage 3 — C++ Verilog Emitter
+
+### 6.1 Overview
+
+The emitter walks each NFA and produces a self-contained Verilog module. It also produces a top-level wrapper module and a simulation testbench. All output files are written to the `output/` directory.
+
+Because Glushkov's construction produces ε-free NFAs, the emitter requires no combinational ε-closure logic. Every transition is labelled with a concrete character, and the next-state logic is a straightforward combinational decode of `char_in` gated by the currently active states. This results in clean, purely registered FSMs with no combinational feedback paths.
+
+### 6.2 Per-NFA Module Interface
+
+Each NFA produces one Verilog module. The module's ports are:
+
+- `clk` — clock input.
+- `rst` — synchronous active-high reset.
+- `start` — a one-cycle pulse that initialises the FSM to its start state, beginning a new match attempt.
+- `end_of_str` — a one-cycle pulse asserted one cycle after the final character of the input string.
+- `char_in` — an 8-bit input carrying the current ASCII character.
+- `match` — a registered output that is asserted for one cycle when the FSM is in an accept state at the moment `end_of_str` is asserted.
+
+### 6.3 One-Hot State Encoding
+
+The state register inside each module is one-hot: there is one flip-flop per NFA state. A bit being set means that NFA state is currently active. Because the NFA is non-deterministic, multiple bits may be set simultaneously, faithfully representing the parallel set of active NFA states.
+
+On reset or on the `start` pulse, the state register is cleared and only the bit corresponding to state 0 (the initial state) is set.
+
+### 6.4 Next-State Logic
+
+The next-state logic is purely combinational and free of any ε-closure computation. For each state j, its next-state bit is asserted if any currently active state i has a transition to j on the current value of `char_in`. The resulting next-state vector is registered on the rising clock edge.
+
+### 6.5 Match Output Logic
+
+The `match` output is registered. It is asserted on the cycle following the cycle on which `end_of_str` is asserted, provided that at least one accept-state bit is active in the state register at the time `end_of_str` is seen. This ensures correct matching for both non-empty and empty strings (if the regex is nullable).
+
+### 6.6 Top-Level Wrapper Module
+
+A single top-level Verilog module instantiates all N NFA modules. All instances share the same `clk`, `rst`, `start`, `end_of_str`, and `char_in` signals. Each instance drives one bit of an N-bit `match` output bus, where bit k corresponds to NFA k.
+
+### 6.7 Emitter Output Files
+
+| File                   | Contents                                        |
+| ---------------------- | ----------------------------------------------- |
+| `nfa_0.v` … `nfa_N.v`  | One self-contained FSM module per regex         |
+| `top.v`                | Top-level wrapper instantiating all NFA modules |
+| `tb_top.v`             | Simulation testbench                            |
+| `expected_matches.txt` | Golden reference output for validation          |
+
+---
+
+## 7. Stage 4 — Simulation Testbench
+
+### 7.1 Structure
+
+The testbench instantiates `top` and drives all its inputs. It operates as follows for each test string:
+
+1. Assert `rst` for a fixed number of cycles to initialise all FSMs.
+2. Assert `start` for one cycle.
+3. Drive `char_in` with successive characters of the test string, one per clock cycle.
+4. On the cycle following the last character, assert `end_of_str` for one cycle.
+5. Sample `match` on the following cycle and compare it against the expected bitmask from the golden reference.
+6. Print a PASS or FAIL message for each test case, including the test string and the observed versus expected match bitmasks.
+
+### 7.2 Waveform Dump
+
+The testbench dumps all signals to a VCD file for inspection in Vivado's waveform viewer.
+
+### 7.3 Timing Assumptions
+
+- The clock period is fixed at 10 ns.
+- `char_in` is stable before the rising clock edge.
+- All control signals (`start`, `end_of_str`) are synchronous and held for exactly one cycle.
+
+---
+
+## 8. Stage 5 — Golden Reference
+
+A separate C++ program reads `regexes.txt` and `test_strings.txt`, runs each test string against each regex using the C++ standard library's full-match mode, and writes `expected_matches.txt`. Each line of the output corresponds to one test string and contains a bitmask (or equivalent structured text) indicating which regexes matched.
+
+This output is consumed by the testbench generator and used during simulation to validate the Verilog results.
+
+---
+
+## 9. Build System and Project Structure
+
+### 9.1 Directory Layout
+
+```
+project/
+├── regexes.txt
+├── test_strings.txt
+│
+├── src/
+│   ├── main.cpp
+│   ├── lexer.h / lexer.cpp
+│   ├── parser.h / parser.cpp
+│   ├── nfa.h / nfa.cpp
+│   └── emitter.h / emitter.cpp
+│
+├── golden/
+│   └── golden.cpp
+│
+└── output/
+    ├── nfa_0.v … nfa_N.v
+    ├── top.v
+    ├── tb_top.v
+    └── expected_matches.txt
+```
+
+### 9.2 Build and Run Order
+
+The pipeline is executed in the following sequence:
+
+1. Compile and run the C++ frontend on `regexes.txt` to produce all Verilog files and `expected_matches.txt`.
+2. Compile and run the golden reference binary on `regexes.txt` and `test_strings.txt` to produce or verify `expected_matches.txt`.
+3. Import all Verilog files into a Xilinx Vivado project.
+4. Run behavioural simulation; confirm all test cases report PASS.
+5. Run synthesis and implementation targeting the chosen FPGA part.
+6. Review timing and resource utilisation reports.
+
+---
+
+## 10. Validation Strategy
+
+### 10.1 Unit Testing the C++ Frontend
+
+Each C++ component is tested independently before integration:
+
+- The lexer is verified against a set of regex strings by inspecting the token stream it produces.
+- The parser is verified by comparing its AST output against hand-drawn trees for representative regexes.
+- The NFA builder is verified by checking, for representative regexes, that the linearisation is correct, that the firstpos, lastpos, and followpos sets match hand-computed values, and that the resulting state and transition counts equal the number of symbol occurrences plus one.
+- The emitter is verified by compiling its output in Vivado and confirming the modules are syntax-valid.
+
+### 10.2 Simulation Validation
+
+Every test case in the testbench must produce a match bitmask identical to the golden reference output. Any discrepancy is a bug in the NFA construction logic or the emitter.
+
+### 10.3 Synthesis Validation
+
+After synthesis and implementation, the following are checked:
+
+- No combinational loops reported by Vivado (expected to be clean given the ε-free NFA structure).
+- Timing closure achieved at the target clock frequency (10 ns period).
+- One-hot encoding inferred correctly for all state registers (confirmed via synthesis log).
+- Resource utilisation (LUT and FF count) scales reasonably with the number of symbol occurrences in the regex set.
+
+---
+
+## 11. Known Design Constraints and Risks
+
+### 11.1 One-Hot State Register Size
+
+One-hot encoding allocates one flip-flop per NFA state. Glushkov's construction produces exactly one state per symbol occurrence plus one initial state — generally fewer states than Thompson's construction for the same regex. With fewer than 20 regexes and relatively simple patterns this is not expected to be problematic, but unusually long or repetitive regexes should be monitored for excessive flip-flop usage.
+
+### 11.2 Dot Operator Fan-Out
+
+The dot operator (`.`) matches any of the 256 possible byte values. Each dot position in the NFA produces transition arcs to its followpos targets for all 256 input characters. Heavy use of dot in patterns will increase LUT usage in the next-state logic accordingly.
+
+### 11.3 Full Match Only
+
+The system performs full-match checking only. Substring search is not supported. Any future extension to substring matching would require changes to how the `start` signal is managed, specifically recycling the FSM from state 0 on every input character.
+
+### 11.4 Shared Symbol Positions Across Regexes
+
+Because all N NFAs share a global state numbering space, the emitter must ensure that position labels assigned during linearisation of one regex do not collide with those of another. This is managed by maintaining a running position counter across all regexes during the construction phase.
+
+---
+
+## 12. Out of Scope
+
+The following are explicitly not part of this project:
+
+- Character classes (`[a-z]`, `[^abc]`, etc.)
+- Anchors (`^` and `$`)
+- Backreferences or capture groups
+- Unicode support (ASCII only)
+- Intersection of regular languages
+- Substring or multi-match modes
+- AXI-Stream or other bus-protocol interfaces
+- Formal verification
+- A graphical front-end or interactive tooling
+
+---
+
+## 13. Stage 5 — FPGA I/O Integration
+
+### 13.1 UART Transmitter (`uart_tx.v`)
+
+| Property   | Value                                                                                         |
+| ---------- | --------------------------------------------------------------------------------------------- |
+| Framing    | 8-N-1                                                                                         |
+| Baud rate  | Parameterised; default 115200 at 100 MHz (`CLKS_PER_BIT = 868`)                               |
+| Data order | LSB first (standard UART)                                                                     |
+| Interface  | `tx_data [7:0]`, `tx_start` (one-cycle pulse), `tx_busy` (high during Tx), `tx` (serial line) |
+
+The transmitter implements a 4-state Moore FSM (`IDLE → START_BIT → DATA_BITS → STOP_BIT`). The serial line idles high. `tx_busy` is asserted for the entire duration of a frame (start + 8 data + stop = 10 × `CLKS_PER_BIT` clock cycles). The caller must poll `tx_busy` before asserting the next `tx_start`.
+
+---
+
+### 13.2 Input FIFO (`uart_rx_fifo.v`)
+
+| Property         | Value                                                                      |
+| ---------------- | -------------------------------------------------------------------------- |
+| Depth            | 16 bytes (parameterisable via `DEPTH_LOG2`)                                |
+| Width            | 8 bits                                                                     |
+| RAM type         | Distributed RAM (SRL16 on Xilinx 7-series)                                 |
+| Clock domains    | Single-clock; no grey-code synchronisation required                        |
+| Overflow policy  | Silently drops incoming byte when `full` is asserted                       |
+| Underflow policy | `rd_data` is undefined when `empty` is asserted; caller must check `empty` |
+
+The FIFO replaces the previous `rx_latched_data` / `rx_pending` single-byte latch. With up to a 16-byte buffer, the NFA control FSM can spend several cycles on the end-of-string / UART-TX sequence without risking byte loss for any input string up to the FIFO depth.
+
+---
+
+### 13.3 Updated `top_fpga.v`
+
+#### 13.3.1 Instantiation hierarchy
+
+```
+top_fpga
+├── uart_rx         (UART byte receiver)
+├── uart_rx_fifo    (16-byte input FIFO)      ← NEW
+├── top             (parallel NFA engine)
+├── uart_tx         (UART byte transmitter)   ← NEW
+└── [control FSM + TX serializer FSM]         ← UPDATED
+```
+
+#### 13.3.2 Main control FSM
+
+The main FSM has 12 states (previously 6). The key additions are:
+
+- **`S_FETCH` / `S_DECODE`**: Read from the FIFO rather than from a latch; classify the byte as a printable character, a line terminator, or a `?` query.
+- **`S_EOL_LATCH`**: After capturing `match_bus`, update all `match_count[k]` registers and snapshot `byte_count` for inclusion in the TX packet.
+- **`S_TX_ARM`**: Invoke the `build_response` task to format the ASCII response into `tx_buf[0..tx_len-1]` and pulse `tx_send`.
+- **`S_TX_WAIT`**: Spin until the TX drain sub-FSM completes (`tx_state == TX_IDLE`).
+- **`S_QUERY_TX`**: Service a `?` byte from the host — build and send a counter snapshot immediately without modifying NFA state.
+
+#### 13.3.3 TX drain sub-FSM
+
+A 4-state FSM (`TX_IDLE → TX_LOAD → TX_WAIT → TX_NEXT`) drains `tx_buf` byte-by-byte through `uart_tx`. It runs concurrently with the main FSM; the main FSM simply waits in `S_TX_WAIT`.
+
+#### 13.3.4 `build_response` task
+
+A synthesisable Verilog `task` that takes the match bitmask and byte counter as inputs and writes a fixed-format ASCII response string into the `tx_buf` register array. The task executes combinationally within the `always` block and completes in a single clock cycle (no loops remain in the synthesised netlist — they are unrolled at elaboration time).
+
+#### 13.3.5 Hardware counters
+
+```verilog
+reg [31:0] byte_count;          // total NFA input bytes since reset
+reg [15:0] match_count [0:15];  // per-regex cumulative match events
+```
+
+Both are synchronously reset by `rst_btn`. `match_count[k]` is incremented on every newline event where `match_bus[k]` is asserted.
+
+---
+
+### 13.4 Serial Protocol
+
+#### Host → FPGA
+
+| Byte(s)                         | Meaning                                                        |
+| ------------------------------- | -------------------------------------------------------------- |
+| Any printable ASCII (0x20–0x7E) | Feed character to NFA engine                                   |
+| `\n` (0x0A) or `\r` (0x0D)      | Assert `end_of_str`; trigger match + response                  |
+| `?` (0x3F)                      | Query current counters; response sent without NFA state change |
+
+#### FPGA → Host
+
+One ASCII line per `\n` / `?` event:
+
+```
+MATCH=<N bits, MSB first> BYTES=<8 hex> HITS=<4 hex per regex, comma-sep>\r\n
+```
+
+---
+
+### 13.5 Python TUI (`tui.py`)
+
+| Aspect         | Detail                                                                        |
+| -------------- | ----------------------------------------------------------------------------- |
+| Dependencies   | `pyserial`, `rich`                                                            |
+| Connection     | Auto-detects first USB-Serial port; overridable with `--port`                 |
+| Display        | Live Rich table: regex index, pattern string, MATCH/NO-MATCH, cumulative hits |
+| Background I/O | UART reads on a daemon thread; UI never blocks on serial                      |
+| Commands       | Plain string → send to FPGA; `?` → counter query; `q` / Ctrl-C → exit         |
+
+---
+
+### 13.6 Timing Budget
+
+At 100 MHz, one complete string-processing cycle from `\n` receipt to TX-complete takes:
+
+- **NFA end-of-string sequence:** 3 clock cycles (S_EOL_END / S_EOL_MATCH / S_EOL_LATCH)
+- **TX packet transmission:** ≈ 95 bytes × 10 bit-times × 868 cycles/bit ≈ 825,000 clock cycles ≈ **8.25 ms**
+
+This is dominated by the 115200 baud UART and is entirely acceptable for an interactive workload. The NFA engine itself remains line-rate capable; the UART is the limiting factor only at the host interface boundary.
+</file>
+
+<file path="docs/usecases.md">
+# Why Hardware Regex Matching Matters
+
+## The Core Problem
+
+Modern financial markets generate enormous volumes of structured text — orders, quotes, news, and trade confirmations — all arriving as high-speed character streams. Firms need to filter, detect, and act on specific patterns within this data faster than any software stack can manage. Hardware regex matching on an FPGA puts that decision as close to the wire as physically possible.
+
+---
+
+## Key Use Cases in Quantitative Finance
+
+**FIX Protocol Parsing.** Every order, cancel, and fill in electronic trading is an ASCII FIX message. Filtering and validating millions of these per second in hardware means routing decisions are made before the message reaches software — shaving off critical microseconds.
+
+**Market Data Feed Filtering.** Exchanges blast full order book updates at millions of events per second. Running regex matches in hardware lets firms discard irrelevant instruments at line rate, so the CPU only processes what the strategy actually needs.
+
+**Tick Data Pattern Detection.** Price movement sequences — bid size spikes, spread collapses, momentum signals — can be encoded as regex patterns over a tokenised tick stream. Hardware detection latency is measured in nanoseconds, not microseconds.
+
+**News and Sentiment Feeds.** Scanning incoming Reuters or Bloomberg text for company names, earnings figures, or central bank language is a multi-regex problem. An FPGA can flag a relevant news item before the full message has even arrived.
+
+**Trade Surveillance and Compliance.** Patterns like spoofing, layering, and wash trading are detectable as sequences in live order flow. Hardware matching enables real-time compliance checks on the live feed rather than retrospective analysis on stored logs.
+
+---
+
+## Why FPGA and Not Just Faster Software?
+
+The fundamental advantage is parallelism. A software engine checks N regexes sequentially — throughput degrades linearly as N grows. An FPGA runs all N FSMs in the same clock cycle, so throughput is flat regardless of how many patterns are active. At scale, no amount of SIMD optimisation closes that gap.
+
+The second advantage is determinism. Software latency varies with cache state, OS scheduling, and branching behaviour. Hardware latency is a fixed number of clock cycles, every time — essential when a one-microsecond edge translates directly into profit.
+
+---
+
+## The Bottom Line
+
+In quantitative finance, the matching decision needs to happen before any further processing, on a continuous high-speed stream, against many patterns simultaneously, with the lowest and most predictable latency possible. That is precisely the problem this system is designed to solve.
+</file>
+
+<file path="output-eg/xsim.dir/phase3_sim/Compile_Options.txt">
+"tb_phase3" -s "phase3_sim"
+</file>
+
+<file path="output-eg/xsim.dir/phase3_sim/xsim_script.tcl">
+xsim {phase3_sim} -autoloadwcfg -runall
+</file>
+
+<file path="output-eg/xsim.dir/phase3_sim/xsim.version">
+hjhoth
+</file>
+
+<file path="output-eg/xsim.dir/phase3_sim/xsimSettings.ini">
+[General]
+ARRAY_DISPLAY_LIMIT=512
+RADIX=hex
+TIME_UNIT=ns
+TRACE_LIMIT=2147483647
+VHDL_ENTITY_SCOPE_FILTER=true
+VHDL_PACKAGE_SCOPE_FILTER=false
+VHDL_BLOCK_SCOPE_FILTER=true
+VHDL_PROCESS_SCOPE_FILTER=false
+VHDL_PROCEDURE_SCOPE_FILTER=false
+VERILOG_MODULE_SCOPE_FILTER=true
+VERILOG_PACKAGE_SCOPE_FILTER=false
+VERILOG_BLOCK_SCOPE_FILTER=false
+VERILOG_TASK_SCOPE_FILTER=false
+VERILOG_PROCESS_SCOPE_FILTER=false
+INPUT_OBJECT_FILTER=true
+OUTPUT_OBJECT_FILTER=true
+INOUT_OBJECT_FILTER=true
+INTERNAL_OBJECT_FILTER=true
+CONSTANT_OBJECT_FILTER=true
+VARIABLE_OBJECT_FILTER=true
+INPUT_PROTOINST_FILTER=true
+OUTPUT_PROTOINST_FILTER=true
+INOUT_PROTOINST_FILTER=true
+INTERNAL_PROTOINST_FILTER=true
+CONSTANT_PROTOINST_FILTER=true
+VARIABLE_PROTOINST_FILTER=true
+SCOPE_NAME_COLUMN_WIDTH=0
+SCOPE_DESIGN_UNIT_COLUMN_WIDTH=0
+SCOPE_BLOCK_TYPE_COLUMN_WIDTH=0
+OBJECT_NAME_COLUMN_WIDTH=0
+OBJECT_VALUE_COLUMN_WIDTH=0
+OBJECT_DATA_TYPE_COLUMN_WIDTH=0
+PROCESS_NAME_COLUMN_WIDTH=0
+PROCESS_TYPE_COLUMN_WIDTH=0
+FRAME_INDEX_COLUMN_WIDTH=0
+FRAME_NAME_COLUMN_WIDTH=0
+FRAME_FILE_NAME_COLUMN_WIDTH=0
+FRAME_LINE_NUM_COLUMN_WIDTH=0
+LOCAL_NAME_COLUMN_WIDTH=0
+LOCAL_VALUE_COLUMN_WIDTH=0
+LOCAL_DATA_TYPE_COLUMN_WIDTH=0
+PROTO_NAME_COLUMN_WIDTH=0
+PROTO_VALUE_COLUMN_WIDTH=0
+INPUT_LOCAL_FILTER=1
+OUTPUT_LOCAL_FILTER=1
+INOUT_LOCAL_FILTER=1
+INTERNAL_LOCAL_FILTER=1
+CONSTANT_LOCAL_FILTER=1
+VARIABLE_LOCAL_FILTER=1
+</file>
+
+<file path="output-eg/xsim.dir/work/work.rlx">
+0.7
+2020.2
+Nov 14 2025
+12:36:23
+/home/cse/Desktop/VSCode/REGEX/XIIRegexBuilder/output-eg/dynamic_nfa.v,1776597717,verilog,,/home/cse/Desktop/VSCode/REGEX/XIIRegexBuilder/output-eg/uart_rx.v,,dynamic_nfa,,,,,,,,
+/home/cse/Desktop/VSCode/REGEX/XIIRegexBuilder/output-eg/tb_phase3.v,1776599145,verilog,,,,tb_phase3,,,,,,,,
+/home/cse/Desktop/VSCode/REGEX/XIIRegexBuilder/output-eg/top_fpga.v,1776599193,verilog,,/home/cse/Desktop/VSCode/REGEX/XIIRegexBuilder/output-eg/tb_phase3.v,,top_fpga,,,,,,,,
+/home/cse/Desktop/VSCode/REGEX/XIIRegexBuilder/output-eg/uart_rx.v,1776165849,verilog,,/home/cse/Desktop/VSCode/REGEX/XIIRegexBuilder/output-eg/uart_tx.v,,uart_rx,,,,,,,,
+/home/cse/Desktop/VSCode/REGEX/XIIRegexBuilder/output-eg/uart_rx_fifo.v,1776165849,verilog,,/home/cse/Desktop/VSCode/REGEX/XIIRegexBuilder/output-eg/top_fpga.v,,uart_rx_fifo,,,,,,,,
+/home/cse/Desktop/VSCode/REGEX/XIIRegexBuilder/output-eg/uart_tx.v,1776165849,verilog,,/home/cse/Desktop/VSCode/REGEX/XIIRegexBuilder/output-eg/uart_rx_fifo.v,,uart_tx,,,,,,,,
+</file>
+
+<file path="output-eg/xsim.dir/xsim.version">
+hjhoth
+</file>
+
+<file path="output-eg/constraints.xdc">
+## Clock signal (Nexys A7 100MHz)
+set_property PACKAGE_PIN E3 [get_ports clk]
+set_property IOSTANDARD LVCMOS33 [get_ports clk]
+create_clock -add -name sys_clk_pin -period 10.00 -waveform {0 5} [get_ports clk]
+
+## USB-RS232 Interface (Nexys A7)
+set_property PACKAGE_PIN C4 [get_ports uart_rx_pin]
+set_property IOSTANDARD LVCMOS33 [get_ports uart_rx_pin]
+
+set_property PACKAGE_PIN D4 [get_ports uart_tx_pin]
+set_property IOSTANDARD LVCMOS33 [get_ports uart_tx_pin]
+
+## Buttons (Nexys A7 Center Button - BTNC)
+set_property PACKAGE_PIN N17 [get_ports rst_btn]
+set_property IOSTANDARD LVCMOS33 [get_ports rst_btn]
+
+## LEDs (Nexys A7 LED0 to LED15)
+set_property PACKAGE_PIN H17 [get_ports {match_leds[0]}]
+set_property IOSTANDARD LVCMOS33 [get_ports {match_leds[0]}]
+set_property PACKAGE_PIN K15 [get_ports {match_leds[1]}]
+set_property IOSTANDARD LVCMOS33 [get_ports {match_leds[1]}]
+set_property PACKAGE_PIN J13 [get_ports {match_leds[2]}]
+set_property IOSTANDARD LVCMOS33 [get_ports {match_leds[2]}]
+set_property PACKAGE_PIN N14 [get_ports {match_leds[3]}]
+set_property IOSTANDARD LVCMOS33 [get_ports {match_leds[3]}]
+set_property PACKAGE_PIN R18 [get_ports {match_leds[4]}]
+set_property IOSTANDARD LVCMOS33 [get_ports {match_leds[4]}]
+set_property PACKAGE_PIN V17 [get_ports {match_leds[5]}]
+set_property IOSTANDARD LVCMOS33 [get_ports {match_leds[5]}]
+</file>
+
+<file path="output-eg/nfa_0.v">
+`timescale 1ns / 1ps
+
+// NFA for regex index 0
+module nfa_0 (
+    input  wire       clk,
+    input  wire       en,
+    input  wire       rst,
+    input  wire       start,
+    input  wire       end_of_str,
+    input  wire [7:0] char_in,
+    output reg        match
+);
+
+    // One-hot state register
+    reg [2:0] state_reg;
+    wire [2:0] next_state;
+
+    assign next_state[0] = 1'b0;
+    assign next_state[1] = (state_reg[0] && (char_in == 8'd97));
+    assign next_state[2] = (state_reg[0] && (char_in == 8'd98));
+
+    always @(posedge clk) begin
+        if (rst || start) begin
+            // Reset to start state (one-hot)
+            state_reg <= 1 << 0;
+        end else if (en) begin
+            state_reg <= next_state;
+        end
+    end
+
+    // Match logic: asserted on cycle following end_of_str
+    always @(posedge clk) begin
+        if (rst || start) begin
+            match <= 1'b0;
+        end else if (en) begin
+            if (end_of_str) begin
+                match <= (|{state_reg[1], state_reg[2]});
+            end else begin
+                match <= 1'b0;
+            end
+        end
+    end
+
+endmodule
+</file>
+
+<file path="output-eg/nfa_1.v">
+`timescale 1ns / 1ps
+
+// NFA for regex index 1
+module nfa_1 (
+    input  wire       clk,
+    input  wire       en,
+    input  wire       rst,
+    input  wire       start,
+    input  wire       end_of_str,
+    input  wire [7:0] char_in,
+    output reg        match
+);
+
+    // One-hot state register
+    reg [3:0] state_reg;
+    wire [3:0] next_state;
+
+    assign next_state[0] = 1'b0;
+    assign next_state[1] = (state_reg[0] && (char_in == 8'd97));
+    assign next_state[2] = (state_reg[1] && (char_in == 8'd98)) | (state_reg[2] && (char_in == 8'd98));
+    assign next_state[3] = (state_reg[1] && (char_in == 8'd99)) | (state_reg[2] && (char_in == 8'd99));
+
+    always @(posedge clk) begin
+        if (rst || start) begin
+            // Reset to start state (one-hot)
+            state_reg <= 1 << 0;
+        end else if (en) begin
+            state_reg <= next_state;
+        end
+    end
+
+    // Match logic: asserted on cycle following end_of_str
+    always @(posedge clk) begin
+        if (rst || start) begin
+            match <= 1'b0;
+        end else if (en) begin
+            if (end_of_str) begin
+                match <= state_reg[3];
+            end else begin
+                match <= 1'b0;
+            end
+        end
+    end
+
+endmodule
+</file>
+
+<file path="output-eg/nfa_2.v">
+`timescale 1ns / 1ps
+
+// NFA for regex index 2
+module nfa_2 (
+    input  wire       clk,
+    input  wire       en,
+    input  wire       rst,
+    input  wire       start,
+    input  wire       end_of_str,
+    input  wire [7:0] char_in,
+    output reg        match
+);
+
+    // One-hot state register
+    reg [3:0] state_reg;
+    wire [3:0] next_state;
+
+    assign next_state[0] = 1'b0;
+    assign next_state[1] = (state_reg[0] && (char_in == 8'd97)) | (state_reg[1] && (char_in == 8'd97)) | (state_reg[2] && (char_in == 8'd97));
+    assign next_state[2] = (state_reg[0] && (char_in == 8'd98)) | (state_reg[1] && (char_in == 8'd98)) | (state_reg[2] && (char_in == 8'd98));
+    assign next_state[3] = (state_reg[1] && (char_in == 8'd99)) | (state_reg[2] && (char_in == 8'd99));
+
+    always @(posedge clk) begin
+        if (rst || start) begin
+            // Reset to start state (one-hot)
+            state_reg <= 1 << 0;
+        end else if (en) begin
+            state_reg <= next_state;
+        end
+    end
+
+    // Match logic: asserted on cycle following end_of_str
+    always @(posedge clk) begin
+        if (rst || start) begin
+            match <= 1'b0;
+        end else if (en) begin
+            if (end_of_str) begin
+                match <= (|{state_reg[1], state_reg[2], state_reg[3]});
+            end else begin
+                match <= 1'b0;
+            end
+        end
+    end
+
+endmodule
+</file>
+
+<file path="output-eg/nfa_3.v">
+`timescale 1ns / 1ps
+
+// NFA for regex index 3
+module nfa_3 (
+    input  wire       clk,
+    input  wire       en,
+    input  wire       rst,
+    input  wire       start,
+    input  wire       end_of_str,
+    input  wire [7:0] char_in,
+    output reg        match
+);
+
+    // One-hot state register
+    reg [3:0] state_reg;
+    wire [3:0] next_state;
+
+    assign next_state[0] = 1'b0;
+    assign next_state[1] = (state_reg[0] && (char_in == 8'd97));
+    assign next_state[2] = (state_reg[1] && (char_in >= 8'd32) && (char_in <= 8'd126));
+    assign next_state[3] = (state_reg[2] && (char_in == 8'd98));
+
+    always @(posedge clk) begin
+        if (rst || start) begin
+            // Reset to start state (one-hot)
+            state_reg <= 1 << 0;
+        end else if (en) begin
+            state_reg <= next_state;
+        end
+    end
+
+    // Match logic: asserted on cycle following end_of_str
+    always @(posedge clk) begin
+        if (rst || start) begin
+            match <= 1'b0;
+        end else if (en) begin
+            if (end_of_str) begin
+                match <= state_reg[3];
+            end else begin
+                match <= 1'b0;
+            end
+        end
+    end
+
+endmodule
+</file>
+
+<file path="output-eg/nfa_4.v">
+`timescale 1ns / 1ps
+
+// NFA for regex index 4
+module nfa_4 (
+    input  wire       clk,
+    input  wire       en,
+    input  wire       rst,
+    input  wire       start,
+    input  wire       end_of_str,
+    input  wire [7:0] char_in,
+    output reg        match
+);
+
+    // One-hot state register
+    reg [3:0] state_reg;
+    wire [3:0] next_state;
+
+    assign next_state[0] = 1'b0;
+    assign next_state[1] = (state_reg[0] && (char_in == 8'd97));
+    assign next_state[2] = (state_reg[1] && (char_in == 8'd98));
+    assign next_state[3] = (state_reg[2] && (char_in == 8'd99));
+
+    always @(posedge clk) begin
+        if (rst || start) begin
+            // Reset to start state (one-hot)
+            state_reg <= 1 << 0;
+        end else if (en) begin
+            state_reg <= next_state;
+        end
+    end
+
+    // Match logic: asserted on cycle following end_of_str
+    always @(posedge clk) begin
+        if (rst || start) begin
+            match <= 1'b0;
+        end else if (en) begin
+            if (end_of_str) begin
+                match <= state_reg[3];
+            end else begin
+                match <= 1'b0;
+            end
+        end
+    end
+
+endmodule
+</file>
+
+<file path="output-eg/nfa_5.v">
+`timescale 1ns / 1ps
+
+// NFA for regex index 5
+module nfa_5 (
+    input  wire       clk,
+    input  wire       en,
+    input  wire       rst,
+    input  wire       start,
+    input  wire       end_of_str,
+    input  wire [7:0] char_in,
+    output reg        match
+);
+
+    // One-hot state register
+    reg [5:0] state_reg;
+    wire [5:0] next_state;
+
+    assign next_state[0] = 1'b0;
+    assign next_state[1] = (state_reg[0] && (char_in == 8'd97)) | (state_reg[1] && (char_in == 8'd97)) | (state_reg[2] && (char_in == 8'd97));
+    assign next_state[2] = (state_reg[0] && (char_in == 8'd98)) | (state_reg[1] && (char_in == 8'd98)) | (state_reg[2] && (char_in == 8'd98));
+    assign next_state[3] = (state_reg[0] && (char_in == 8'd99)) | (state_reg[1] && (char_in == 8'd99)) | (state_reg[2] && (char_in == 8'd99));
+    assign next_state[4] = (state_reg[3] && (char_in == 8'd100)) | (state_reg[4] && (char_in == 8'd100)) | (state_reg[5] && (char_in == 8'd100));
+    assign next_state[5] = (state_reg[3] && (char_in == 8'd101)) | (state_reg[4] && (char_in == 8'd101)) | (state_reg[5] && (char_in == 8'd101));
+
+    always @(posedge clk) begin
+        if (rst || start) begin
+            // Reset to start state (one-hot)
+            state_reg <= 1 << 0;
+        end else if (en) begin
+            state_reg <= next_state;
+        end
+    end
+
+    // Match logic: asserted on cycle following end_of_str
+    always @(posedge clk) begin
+        if (rst || start) begin
+            match <= 1'b0;
+        end else if (en) begin
+            if (end_of_str) begin
+                match <= (|{state_reg[4], state_reg[5]});
+            end else begin
+                match <= 1'b0;
+            end
+        end
+    end
+
+endmodule
+</file>
+
+<file path="output-eg/tb_dynamic_core.v">
+`timescale 1ns / 1ps
+
+module tb_dynamic_core;
+
+    reg clk;
+    reg reset;
+    reg en;
+    reg [7:0] char_in;
+    
+    reg prog_en;
+    reg [3:0] prog_state_id;
+    reg [6:0] prog_char;
+    reg [15:0] prog_mask;
+    reg [15:0] prog_accept_mask_in;
+    reg prog_accept_en;
+    
+    wire match_out;
+
+    dynamic_nfa #(
+        .MAX_STATES(16),
+        .ALPHABET_SIZE(128)
+    ) dut (
+        .clk(clk),
+        .reset(reset),
+        .en(en),
+        .char_in(char_in),
+        .prog_en(prog_en),
+        .prog_state_id(prog_state_id),
+        .prog_char(prog_char),
+        .prog_mask(prog_mask),
+        .prog_accept_mask_in(prog_accept_mask_in),
+        .prog_accept_en(prog_accept_en),
+        .match_out(match_out)
+    );
+
+    always #5 clk = ~clk;
+
+    initial begin
+        clk = 0;
+        reset = 1;
+        en = 0;
+        char_in = 0;
+        prog_en = 0;
+        prog_state_id = 0;
+        prog_char = 0;
+        prog_mask = 0;
+        prog_accept_mask_in = 0;
+        prog_accept_en = 0;
+
+        #20 reset = 0;
+
+        // Program "ab"
+        // State 0 + 'a' -> State 1
+        @(posedge clk);
+        prog_en <= 1;
+        prog_state_id <= 4'd0;
+        prog_char <= 7'd97; // 'a'
+        prog_mask <= 16'h0002;
+        @(posedge clk);
+        
+        // State 1 + 'b' -> State 2
+        prog_state_id <= 4'd1;
+        prog_char <= 7'd98; // 'b'
+        prog_mask <= 16'h0004;
+        @(posedge clk);
+        
+        prog_en <= 0;
+        
+        // Accept Mask = State 2
+        prog_accept_en <= 1;
+        prog_accept_mask_in <= 16'h0004;
+        @(posedge clk);
+        prog_accept_en <= 0;
+
+        #20;
+
+        // Test "ab"
+        $display("Testing 'ab'...");
+        reset = 1; #10 reset = 0; 
+        
+        @(posedge clk);
+        en <= 1;
+        char_in <= "a";
+        @(posedge clk);
+        #1; // Wait a bit for async match_out to settle
+        $display("Char: 'a', Match: %b", match_out);
+        
+        char_in <= "b";
+        @(posedge clk);
+        #1;
+        $display("Char: 'b', Match: %b", match_out);
+        
+        if (match_out === 1'b1)
+            $display("Test 'ab': PASS");
+        else
+            $display("Test 'ab': FAIL");
+
+        #20;
+
+        // Test "ac"
+        $display("Testing 'ac'...");
+        reset = 1; #10 reset = 0; 
+        
+        @(posedge clk);
+        en <= 1;
+        char_in <= "a";
+        @(posedge clk);
+        #1;
+        $display("Char: 'a', Match: %b", match_out);
+        
+        char_in <= "c";
+        @(posedge clk);
+        #1;
+        $display("Char: 'c', Match: %b", match_out);
+        
+        if (match_out === 1'b0)
+            $display("Test 'ac': PASS");
+        else
+            $display("Test 'ac': FAIL");
+
+        $finish;
+    end
+
+endmodule
+</file>
+
+<file path="output-eg/tb_phase3.v">
+`timescale 1ns / 1ps
+
+module tb_phase3;
+
+    reg clk;
+    reg rst_btn;
+    reg uart_rx_pin;
+    wire uart_tx_pin;
+    wire [15:0] match_leds;
+
+    // Override parameters for fast simulation
+    top_fpga #(
+        .CLKS_PER_BIT(10), // Shorten bit time
+        .PROG_TOTAL_BYTES(4) // Only 2 words: Accept Mask + 1 Transition
+    ) dut (
+        .clk(clk),
+        .rst_btn(rst_btn),
+        .uart_rx_pin(uart_rx_pin),
+        .uart_tx_pin(uart_tx_pin),
+        .match_leds(match_leds)
+    );
+
+    always #5 clk = ~clk;
+
+    task send_byte(input [7:0] data);
+        integer i;
+        begin
+            // Start bit
+            uart_rx_pin = 0;
+            repeat (10) @(posedge clk);
+            // Data bits
+            for (i = 0; i < 8; i = i + 1) begin
+                uart_rx_pin = data[i];
+                repeat (10) @(posedge clk);
+            end
+            // Stop bit
+            uart_rx_pin = 1;
+            repeat (10) @(posedge clk);
+        end
+    endtask
+
+    initial begin
+        clk = 0;
+        rst_btn = 1;
+        uart_rx_pin = 1;
+        #100 rst_btn = 0;
+        #100;
+
+        $display("Sending Programming Sequence: FE FE AA BB CC DD");
+        
+        // Header
+        send_byte(8'hFE);
+        send_byte(8'hFE);
+        
+        // Payload (4 bytes total as overridden)
+        // Word 0: AA BB (Accept Mask = 0xBBAA)
+        send_byte(8'hAA);
+        send_byte(8'hBB);
+        
+        // Word 1: CC DD (Transition Mask = 0xDDCC for State 0, Char 0)
+        send_byte(8'hCC);
+        send_byte(8'hDD);
+
+        #1000;
+        
+        if (dut.state == 4'd0) // S_IDLE
+            $display("SUCCESS: FSM returned to S_IDLE");
+        else
+            $display("FAILURE: FSM in state %d", dut.state);
+
+        $finish;
+    end
+
+endmodule
+</file>
+
+<file path="output-eg/tb_top.v">
+`timescale 1ns / 1ps
+
+module tb_top;
+    reg clk, en, rst, start, end_of_str;
+    reg [7:0] char_in;
+    wire [5:0] match_bus;
+
+    top uut (.clk(clk), .en(en), .rst(rst), .start(start), .end_of_str(end_of_str), .char_in(char_in), .match_bus(match_bus));
+
+    always #5 clk = ~clk;
+
+    initial begin
+        // synthesis translate_off
+        `ifndef SYNTHESIS
+        $dumpfile("dump.vcd");
+        $dumpvars(0, tb_top);
+        `endif
+        // synthesis translate_on
+
+        clk = 0; en = 1; rst = 1; start = 0; end_of_str = 0; char_in = 0;
+        #20 rst = 0; #10;
+
+        // Test case 0: "a"
+        start = 1; #10 start = 0;
+        char_in = 8'h61; #10;
+        end_of_str = 1; #10;
+        // Match output is valid on the cycle immediately following end_of_str assertion
+        if (match_bus === 6'b000101) begin
+            $display("PASS: Test case 0 ('a') matches expected mask 000101");
+        end else begin
+            $display("FAIL: Test case 0 ('a') expected 000101, got %b", match_bus);
+        end
+        end_of_str = 0; #10;
+
+        // Test case 1: "b"
+        start = 1; #10 start = 0;
+        char_in = 8'h62; #10;
+        end_of_str = 1; #10;
+        // Match output is valid on the cycle immediately following end_of_str assertion
+        if (match_bus === 6'b000101) begin
+            $display("PASS: Test case 1 ('b') matches expected mask 000101");
+        end else begin
+            $display("FAIL: Test case 1 ('b') expected 000101, got %b", match_bus);
+        end
+        end_of_str = 0; #10;
+
+        // Test case 2: "c"
+        start = 1; #10 start = 0;
+        char_in = 8'h63; #10;
+        end_of_str = 1; #10;
+        // Match output is valid on the cycle immediately following end_of_str assertion
+        if (match_bus === 6'b000000) begin
+            $display("PASS: Test case 2 ('c') matches expected mask 000000");
+        end else begin
+            $display("FAIL: Test case 2 ('c') expected 000000, got %b", match_bus);
+        end
+        end_of_str = 0; #10;
+
+        // Test case 3: "aa"
+        start = 1; #10 start = 0;
+        char_in = 8'h61; #10;
+        char_in = 8'h61; #10;
+        end_of_str = 1; #10;
+        // Match output is valid on the cycle immediately following end_of_str assertion
+        if (match_bus === 6'b000100) begin
+            $display("PASS: Test case 3 ('aa') matches expected mask 000100");
+        end else begin
+            $display("FAIL: Test case 3 ('aa') expected 000100, got %b", match_bus);
+        end
+        end_of_str = 0; #10;
+
+        // Test case 4: "ab"
+        start = 1; #10 start = 0;
+        char_in = 8'h61; #10;
+        char_in = 8'h62; #10;
+        end_of_str = 1; #10;
+        // Match output is valid on the cycle immediately following end_of_str assertion
+        if (match_bus === 6'b000100) begin
+            $display("PASS: Test case 4 ('ab') matches expected mask 000100");
+        end else begin
+            $display("FAIL: Test case 4 ('ab') expected 000100, got %b", match_bus);
+        end
+        end_of_str = 0; #10;
+
+        // Test case 5: "ac"
+        start = 1; #10 start = 0;
+        char_in = 8'h61; #10;
+        char_in = 8'h63; #10;
+        end_of_str = 1; #10;
+        // Match output is valid on the cycle immediately following end_of_str assertion
+        if (match_bus === 6'b000110) begin
+            $display("PASS: Test case 5 ('ac') matches expected mask 000110");
+        end else begin
+            $display("FAIL: Test case 5 ('ac') expected 000110, got %b", match_bus);
+        end
+        end_of_str = 0; #10;
+
+        // Test case 6: "abc"
+        start = 1; #10 start = 0;
+        char_in = 8'h61; #10;
+        char_in = 8'h62; #10;
+        char_in = 8'h63; #10;
+        end_of_str = 1; #10;
+        // Match output is valid on the cycle immediately following end_of_str assertion
+        if (match_bus === 6'b010110) begin
+            $display("PASS: Test case 6 ('abc') matches expected mask 010110");
+        end else begin
+            $display("FAIL: Test case 6 ('abc') expected 010110, got %b", match_bus);
+        end
+        end_of_str = 0; #10;
+
+        // Test case 7: "abbc"
+        start = 1; #10 start = 0;
+        char_in = 8'h61; #10;
+        char_in = 8'h62; #10;
+        char_in = 8'h62; #10;
+        char_in = 8'h63; #10;
+        end_of_str = 1; #10;
+        // Match output is valid on the cycle immediately following end_of_str assertion
+        if (match_bus === 6'b000110) begin
+            $display("PASS: Test case 7 ('abbc') matches expected mask 000110");
+        end else begin
+            $display("FAIL: Test case 7 ('abbc') expected 000110, got %b", match_bus);
+        end
+        end_of_str = 0; #10;
+
+        // Test case 8: "abbbc"
+        start = 1; #10 start = 0;
+        char_in = 8'h61; #10;
+        char_in = 8'h62; #10;
+        char_in = 8'h62; #10;
+        char_in = 8'h62; #10;
+        char_in = 8'h63; #10;
+        end_of_str = 1; #10;
+        // Match output is valid on the cycle immediately following end_of_str assertion
+        if (match_bus === 6'b000110) begin
+            $display("PASS: Test case 8 ('abbbc') matches expected mask 000110");
+        end else begin
+            $display("FAIL: Test case 8 ('abbbc') expected 000110, got %b", match_bus);
+        end
+        end_of_str = 0; #10;
+
+        // Test case 9: "aaaa"
+        start = 1; #10 start = 0;
+        char_in = 8'h61; #10;
+        char_in = 8'h61; #10;
+        char_in = 8'h61; #10;
+        char_in = 8'h61; #10;
+        end_of_str = 1; #10;
+        // Match output is valid on the cycle immediately following end_of_str assertion
+        if (match_bus === 6'b000100) begin
+            $display("PASS: Test case 9 ('aaaa') matches expected mask 000100");
+        end else begin
+            $display("FAIL: Test case 9 ('aaaa') expected 000100, got %b", match_bus);
+        end
+        end_of_str = 0; #10;
+
+        // Test case 10: "bbbb"
+        start = 1; #10 start = 0;
+        char_in = 8'h62; #10;
+        char_in = 8'h62; #10;
+        char_in = 8'h62; #10;
+        char_in = 8'h62; #10;
+        end_of_str = 1; #10;
+        // Match output is valid on the cycle immediately following end_of_str assertion
+        if (match_bus === 6'b000100) begin
+            $display("PASS: Test case 10 ('bbbb') matches expected mask 000100");
+        end else begin
+            $display("FAIL: Test case 10 ('bbbb') expected 000100, got %b", match_bus);
+        end
+        end_of_str = 0; #10;
+
+        // Test case 11: "x"
+        start = 1; #10 start = 0;
+        char_in = 8'h78; #10;
+        end_of_str = 1; #10;
+        // Match output is valid on the cycle immediately following end_of_str assertion
+        if (match_bus === 6'b000000) begin
+            $display("PASS: Test case 11 ('x') matches expected mask 000000");
+        end else begin
+            $display("FAIL: Test case 11 ('x') expected 000000, got %b", match_bus);
+        end
+        end_of_str = 0; #10;
+
+        // Test case 12: "axb"
+        start = 1; #10 start = 0;
+        char_in = 8'h61; #10;
+        char_in = 8'h78; #10;
+        char_in = 8'h62; #10;
+        end_of_str = 1; #10;
+        // Match output is valid on the cycle immediately following end_of_str assertion
+        if (match_bus === 6'b001000) begin
+            $display("PASS: Test case 12 ('axb') matches expected mask 001000");
+        end else begin
+            $display("FAIL: Test case 12 ('axb') expected 001000, got %b", match_bus);
+        end
+        end_of_str = 0; #10;
+
+        // Test case 13: "ayb"
+        start = 1; #10 start = 0;
+        char_in = 8'h61; #10;
+        char_in = 8'h79; #10;
+        char_in = 8'h62; #10;
+        end_of_str = 1; #10;
+        // Match output is valid on the cycle immediately following end_of_str assertion
+        if (match_bus === 6'b001000) begin
+            $display("PASS: Test case 13 ('ayb') matches expected mask 001000");
+        end else begin
+            $display("FAIL: Test case 13 ('ayb') expected 001000, got %b", match_bus);
+        end
+        end_of_str = 0; #10;
+
+        // Test case 14: "(a|b)"
+        start = 1; #10 start = 0;
+        char_in = 8'h28; #10;
+        char_in = 8'h61; #10;
+        char_in = 8'h7c; #10;
+        char_in = 8'h62; #10;
+        char_in = 8'h29; #10;
+        end_of_str = 1; #10;
+        // Match output is valid on the cycle immediately following end_of_str assertion
+        if (match_bus === 6'b000000) begin
+            $display("PASS: Test case 14 ('(a|b)') matches expected mask 000000");
+        end else begin
+            $display("FAIL: Test case 14 ('(a|b)') expected 000000, got %b", match_bus);
+        end
+        end_of_str = 0; #10;
+
+        // Test case 15: "abc"
+        start = 1; #10 start = 0;
+        char_in = 8'h61; #10;
+        char_in = 8'h62; #10;
+        char_in = 8'h63; #10;
+        end_of_str = 1; #10;
+        // Match output is valid on the cycle immediately following end_of_str assertion
+        if (match_bus === 6'b010110) begin
+            $display("PASS: Test case 15 ('abc') matches expected mask 010110");
+        end else begin
+            $display("FAIL: Test case 15 ('abc') expected 010110, got %b", match_bus);
+        end
+        end_of_str = 0; #10;
+
+        // Test case 16: "abcd"
+        start = 1; #10 start = 0;
+        char_in = 8'h61; #10;
+        char_in = 8'h62; #10;
+        char_in = 8'h63; #10;
+        char_in = 8'h64; #10;
+        end_of_str = 1; #10;
+        // Match output is valid on the cycle immediately following end_of_str assertion
+        if (match_bus === 6'b100000) begin
+            $display("PASS: Test case 16 ('abcd') matches expected mask 100000");
+        end else begin
+            $display("FAIL: Test case 16 ('abcd') expected 100000, got %b", match_bus);
+        end
+        end_of_str = 0; #10;
+
+        // Test case 17: "abce"
+        start = 1; #10 start = 0;
+        char_in = 8'h61; #10;
+        char_in = 8'h62; #10;
+        char_in = 8'h63; #10;
+        char_in = 8'h65; #10;
+        end_of_str = 1; #10;
+        // Match output is valid on the cycle immediately following end_of_str assertion
+        if (match_bus === 6'b100000) begin
+            $display("PASS: Test case 17 ('abce') matches expected mask 100000");
+        end else begin
+            $display("FAIL: Test case 17 ('abce') expected 100000, got %b", match_bus);
+        end
+        end_of_str = 0; #10;
+
+        $display("All tests completed.");
+        #100; $finish;
+    end
+endmodule
+</file>
+
+<file path="output-eg/top.v">
+`timescale 1ns / 1ps
+
+module top (
+    input  wire       clk,
+    input  wire       en,
+    input  wire       rst,
+    input  wire       start,
+    input  wire       end_of_str,
+    input  wire [7:0] char_in,
+    output wire [5:0] match_bus
+);
+
+    nfa_0 inst_0 (
+        .clk(clk), .en(en), .rst(rst), .start(start), .end_of_str(end_of_str), .char_in(char_in), .match(match_bus[0])
+    );
+
+    nfa_1 inst_1 (
+        .clk(clk), .en(en), .rst(rst), .start(start), .end_of_str(end_of_str), .char_in(char_in), .match(match_bus[1])
+    );
+
+    nfa_2 inst_2 (
+        .clk(clk), .en(en), .rst(rst), .start(start), .end_of_str(end_of_str), .char_in(char_in), .match(match_bus[2])
+    );
+
+    nfa_3 inst_3 (
+        .clk(clk), .en(en), .rst(rst), .start(start), .end_of_str(end_of_str), .char_in(char_in), .match(match_bus[3])
+    );
+
+    nfa_4 inst_4 (
+        .clk(clk), .en(en), .rst(rst), .start(start), .end_of_str(end_of_str), .char_in(char_in), .match(match_bus[4])
+    );
+
+    nfa_5 inst_5 (
+        .clk(clk), .en(en), .rst(rst), .start(start), .end_of_str(end_of_str), .char_in(char_in), .match(match_bus[5])
+    );
+
+endmodule
+</file>
+
+<file path="output-eg/uart_rx_fifo.v">
+`timescale 1ns / 1ps
+
+
+module uart_rx_fifo #(
+    parameter DEPTH_LOG2 = 4        // depth = 2^DEPTH_LOG2 = 16
+)(
+    input  wire       clk,
+    input  wire       rst,
+    input  wire [7:0] wr_data,
+    input  wire       wr_en,
+    output wire       full,
+    output wire [7:0] rd_data,
+    input  wire       rd_en,
+    output wire       empty
+);
+    localparam DEPTH = 1 << DEPTH_LOG2;
+
+    reg [7:0] mem [0:DEPTH-1];
+    reg [DEPTH_LOG2-1:0] wr_ptr = {DEPTH_LOG2{1'b0}};
+    reg [DEPTH_LOG2-1:0] rd_ptr = {DEPTH_LOG2{1'b0}};
+    reg [DEPTH_LOG2  :0] count  = {(DEPTH_LOG2+1){1'b0}};
+
+    assign full    = (count == DEPTH[DEPTH_LOG2:0]);
+    assign empty   = (count == {(DEPTH_LOG2+1){1'b0}});
+    assign rd_data = mem[rd_ptr];
+
+    always @(posedge clk) begin
+        if (rst) begin
+            wr_ptr <= {DEPTH_LOG2{1'b0}};
+            rd_ptr <= {DEPTH_LOG2{1'b0}};
+            count  <= {(DEPTH_LOG2+1){1'b0}};
+        end else begin
+            if (wr_en && !full && rd_en && !empty) begin
+                mem[wr_ptr] <= wr_data;
+                wr_ptr      <= wr_ptr + 1;
+                rd_ptr      <= rd_ptr + 1;
+            end else if (wr_en && !full) begin
+                mem[wr_ptr] <= wr_data;
+                wr_ptr      <= wr_ptr + 1;
+                count       <= count + 1;
+            end else if (rd_en && !empty) begin
+                rd_ptr <= rd_ptr + 1;
+                count  <= count - 1;
+            end
+        end
+    end
+endmodule
+</file>
+
+<file path="output-eg/uart_rx.v">
+`timescale 1ns / 1ps
+
+
+module uart_rx #(
+    parameter CLKS_PER_BIT = 868 // 100 MHz / 115200 Baud
+)(
+    input  wire       clk,
+    input  wire       rx,
+    output reg  [7:0] rx_data,
+    output reg        rx_ready
+);
+    localparam IDLE = 2'b00, START_BIT = 2'b01, DATA_BITS = 2'b10, STOP_BIT = 2'b11;
+    reg [1:0] state = IDLE;
+    reg [9:0] clk_count = 0;
+    reg [2:0] bit_idx = 0;
+
+    always @(posedge clk) begin
+        case (state)
+            IDLE: begin
+                rx_ready <= 1'b0;
+                clk_count <= 0;
+                bit_idx <= 0;
+                if (rx == 1'b0) state <= START_BIT;
+            end
+            START_BIT: begin
+                if (clk_count == (CLKS_PER_BIT-1)/2) begin
+                    if (rx == 1'b0) begin
+                        clk_count <= 0;
+                        state <= DATA_BITS;
+                    end else state <= IDLE;
+                end else clk_count <= clk_count + 1;
+            end
+            DATA_BITS: begin
+                if (clk_count < CLKS_PER_BIT-1) begin
+                    clk_count <= clk_count + 1;
+                end else begin
+                    clk_count <= 0;
+                    rx_data[bit_idx] <= rx;
+                    if (bit_idx < 7) bit_idx <= bit_idx + 1;
+                    else state <= STOP_BIT;
+                end
+            end
+            STOP_BIT: begin
+                if (clk_count < CLKS_PER_BIT-1) begin
+                    clk_count <= clk_count + 1;
+                end else begin
+                    if (rx == 1'b1) rx_ready <= 1'b1;
+                    state <= IDLE;
+                end
+            end
+        endcase
+    end
+endmodule
+</file>
+
+<file path="output-eg/uart_tx.v">
+`timescale 1ns / 1ps
+
+
+module uart_tx #(
+    parameter CLKS_PER_BIT = 868   // 100 MHz / 115200 baud
+)(
+    input  wire       clk,
+    input  wire       rst,
+    input  wire [7:0] tx_data,
+    input  wire       tx_start,
+    output reg        tx_busy,
+    output reg        tx
+);
+    localparam S_IDLE      = 3'd0;
+    localparam S_START_BIT = 3'd1;
+    localparam S_DATA_BITS = 3'd2;
+    localparam S_STOP_BIT  = 3'd3;
+
+    reg [2:0]  state    = S_IDLE;
+    reg [9:0]  clk_cnt  = 10'd0;
+    reg [2:0]  bit_idx  = 3'd0;
+    reg [7:0]  tx_shift = 8'd0;
+
+    always @(posedge clk) begin
+        if (rst) begin
+            state    <= S_IDLE;
+            tx       <= 1'b1;
+            tx_busy  <= 1'b0;
+            clk_cnt  <= 10'd0;
+            bit_idx  <= 3'd0;
+            tx_shift <= 8'd0;
+        end else begin
+            case (state)
+                S_IDLE: begin
+                    tx      <= 1'b1;
+                    tx_busy <= 1'b0;
+                    clk_cnt <= 10'd0;
+                    bit_idx <= 3'd0;
+                    if (tx_start) begin
+                        tx_shift <= tx_data;
+                        tx_busy  <= 1'b1;
+                        state    <= S_START_BIT;
+                    end
+                end
+                S_START_BIT: begin
+                    tx <= 1'b0;
+                    if (clk_cnt < CLKS_PER_BIT - 1)
+                        clk_cnt <= clk_cnt + 1;
+                    else begin
+                        clk_cnt <= 10'd0;
+                        state   <= S_DATA_BITS;
+                    end
+                end
+                S_DATA_BITS: begin
+                    tx <= tx_shift[0];
+                    if (clk_cnt < CLKS_PER_BIT - 1)
+                        clk_cnt <= clk_cnt + 1;
+                    else begin
+                        clk_cnt  <= 10'd0;
+                        tx_shift <= tx_shift >> 1;
+                        if (bit_idx < 7)
+                            bit_idx <= bit_idx + 1;
+                        else begin
+                            bit_idx <= 3'd0;
+                            state   <= S_STOP_BIT;
+                        end
+                    end
+                end
+                S_STOP_BIT: begin
+                    tx <= 1'b1;
+                    if (clk_cnt < CLKS_PER_BIT - 1)
+                        clk_cnt <= clk_cnt + 1;
+                    else begin
+                        clk_cnt <= 10'd0;
+                        state   <= S_IDLE;
+                    end
+                end
+                default: state <= S_IDLE;
+            endcase
+        end
+    end
+endmodule
+</file>
+
+<file path="scripts/program.tcl">
+# VIVADO PROGRAMMING SCRIPT
+
+open_hw_manager
+connect_hw_server
+open_hw_target
+
+# Get first connected FPGA device
+set device [lindex [get_hw_devices] 0]
+current_hw_device $device
+refresh_hw_device -update_hw_probes false $device
+
+# Set bitstream file and program
+# Targeting the bitfile generated by synth.tcl
+set_property PROGRAM.FILE "top_fpga.bit" $device
+program_hw_devices $device
+
+# Finish and close
+close_hw_manager
+</file>
+
+<file path="scripts/synth.tcl">
+# VIVADO SYNTHESIS & BITSTREAM SCRIPT
+# This script automates the flow for the generated Regex Matcher hardware
+
+# 1. Define target part (Nexys A7 100T)
+set part xc7a100tcsg324-1
+set outputDir ./build
+file mkdir $outputDir
+
+# 2. Create the project in memory
+create_project -in_memory -part $part
+
+# 3. Read all Verilog files
+# All Verilog files listed here are generated by `make run`
+read_verilog [glob output/nfa_*.v]
+read_verilog output/top.v
+read_verilog output/uart_rx.v
+read_verilog output/uart_tx.v
+read_verilog output/uart_rx_fifo.v
+read_verilog output/top_fpga.v
+
+# 4. Read Constraints
+read_xdc output/constraints.xdc
+
+# 5. Run Synthesis
+synth_design -top top_fpga -part $part
+
+# 6. Run Implementation Flow
+opt_design
+place_design
+route_design
+
+# 7. Generate Reports
+report_utilization    -file $outputDir/post_route_util.txt
+report_timing_summary -file $outputDir/post_route_timing.txt
+
+# 8. Generate Bitstream
+write_bitstream -force top_fpga.bit
+
+# 9. Cleanup and close
+close_project
+</file>
+
+<file path="src/lexer.cpp">
+#include "lexer.h"
+#include <stdexcept>
+
+std::string tokenTypeToString(TokenType type) {
+    switch (type) {
+        case TokenType::LITERAL:   return "LITERAL";
+        case TokenType::DOT:       return "DOT";
+        case TokenType::STAR:      return "STAR";
+        case TokenType::PLUS:      return "PLUS";
+        case TokenType::QUESTION:  return "QUESTION";
+        case TokenType::PIPE:      return "PIPE";
+        case TokenType::LPAREN:    return "LPAREN";
+        case TokenType::RPAREN:    return "RPAREN";
+        case TokenType::END_OF_INPUT: return "END_OF_INPUT";
+        default:                   return "UNKNOWN";
+    }
+}
+
+Lexer::Lexer(const std::string& input, int lineNum)
+    : input(input), pos(0), line(lineNum), col(1) {}
+
+char Lexer::peek() const {
+    if (isAtEnd()) return '\0';
+    return input[pos];
+}
+
+char Lexer::advance() {
+    char current = input[pos++];
+    col++;
+    return current;
+}
+
+bool Lexer::isAtEnd() const {
+    return pos >= input.length();
+}
+
+std::vector<Token> Lexer::tokenize() {
+    std::vector<Token> tokens;
+
+    while (!isAtEnd()) {
+        char c = peek();
+        int currentCharCol = col;
+
+        switch (c) {
+            case '.':
+                tokens.emplace_back(TokenType::DOT, advance(), line, currentCharCol);
+                break;
+            case '*':
+                tokens.emplace_back(TokenType::STAR, advance(), line, currentCharCol);
+                break;
+            case '+':
+                tokens.emplace_back(TokenType::PLUS, advance(), line, currentCharCol);
+                break;
+            case '?':
+                tokens.emplace_back(TokenType::QUESTION, advance(), line, currentCharCol);
+                break;
+            case '|':
+                tokens.emplace_back(TokenType::PIPE, advance(), line, currentCharCol);
+                break;
+            case '(':
+                tokens.emplace_back(TokenType::LPAREN, advance(), line, currentCharCol);
+                break;
+            case ')':
+                tokens.emplace_back(TokenType::RPAREN, advance(), line, currentCharCol);
+                break;
+            default:
+                if (c >= 32 && c <= 126) {
+                    tokens.emplace_back(TokenType::LITERAL, advance(), line, currentCharCol);
+                } else {
+                    throw std::runtime_error("Invalid character at line " + std::to_string(line) + 
+                                             ", column " + std::to_string(currentCharCol) + ": code " + std::to_string(static_cast<unsigned char>(c)));
+                }
+                break;
+        }
+    }
+
+    tokens.emplace_back(TokenType::END_OF_INPUT, '\0', line, col);
+    return tokens;
+}
+</file>
+
+<file path="src/lexer.h">
+#ifndef LEXER_H
+#define LEXER_H
+
+#include <string>
+#include <vector>
+#include <ostream>
+
+enum class TokenType {
+    LITERAL,
+    DOT,
+    STAR,
+    PLUS,
+    QUESTION,
+    PIPE,
+    LPAREN,
+    RPAREN,
+    END_OF_INPUT
+};
+
+struct Token {
+    TokenType type;
+    char value; // Meaningful for LITERAL, otherwise ignored or holds the char representation
+    int line;   // Useful for error reporting
+    int column; // Useful for error reporting
+
+    Token(TokenType t, char v = 0, int l = 0, int c = 0)
+        : type(t), value(v), line(l), column(c) {}
+};
+
+std::string tokenTypeToString(TokenType type);
+
+class Lexer {
+public:
+    explicit Lexer(const std::string& input, int lineNum = 0);
+    std::vector<Token> tokenize();
+
+private:
+    std::string input;
+    size_t pos;
+    int line;
+    int col;
+
+    char peek() const;
+    char advance();
+    bool isAtEnd() const;
+};
+
+#endif // LEXER_H
+</file>
+
+<file path="src/nfa.cpp">
+#include "nfa.h"
+#include <iostream>
+#include <algorithm>
+
+// Start at -1 so the first ++globalStateCounter gives 0.
+int NFABuilder::globalStateCounter = -1;
+
+void NFA::addState(int id, bool isAccept) {
+    states.emplace(id, NFAState(id, isAccept));
+}
+
+void NFA::addTransition(int fromId, unsigned char c, int toId) {
+    states.at(fromId).transitions[c].insert(toId);
+}
+
+bool NFA::simulate(const std::string& input) const {
+    std::set<int> activeStates = {startStateId};
+    
+    for (unsigned char c : input) {
+        std::set<int> nextStates;
+        for (int stateId : activeStates) {
+            auto& state = states.at(stateId);
+            if (state.transitions.count(c)) {
+                for (int nextId : state.transitions.at(c)) {
+                    nextStates.insert(nextId);
+                }
+            }
+        }
+        activeStates = nextStates;
+        if (activeStates.empty()) return false;
+    }
+    
+    for (int stateId : activeStates) {
+        if (states.at(stateId).isAccept) return true;
+    }
+    return false;
+}
+
+std::unique_ptr<NFA> NFABuilder::build(ASTNode* root, int regexIdx) {
+    if (!root) return nullptr;
+
+    auto nfa = std::make_unique<NFA>(regexIdx);
+    
+    // 1. Linearization (assign positions to symbols)
+    int localPosCounter = 1;
+    std::map<int, unsigned char> posToChar;
+    std::set<int> dotPositions;
+    linearize(root, localPosCounter, posToChar, dotPositions);
+    int numPositions = localPosCounter - 1;
+
+    // 2. Compute nullable, firstpos, lastpos
+    computeNullableFirstLast(root);
+
+    // 3. Compute followpos
+    std::map<int, std::set<int>> followpos;
+    for (int i = 1; i <= numPositions; ++i) {
+        followpos[i] = std::set<int>();
+    }
+    computeFollowpos(root, followpos);
+
+    // 4. Build NFA states and transitions
+    // Glushkov states: 0 (initial) + 1..n
+    // We map these to global IDs. 
+    // Invariant: after each build(), globalStateCounter equals the highest global ID used.
+    
+    int startGlobalId = ++globalStateCounter;
+    nfa->startStateId = startGlobalId;
+    std::map<int, int> localToGlobal;
+    localToGlobal[0] = startGlobalId;
+    nfa->addState(startGlobalId, root->nullable);
+
+    for (int i = 1; i <= numPositions; ++i) {
+        localToGlobal[i] = ++globalStateCounter;
+        bool isAccept = (root->lastpos.find(i) != root->lastpos.end());
+        nfa->addState(localToGlobal[i], isAccept);
+    }
+
+    // Transitions from state 0
+    for (int p : root->firstpos) {
+        if (dotPositions.find(p) != dotPositions.end()) { // DOT
+            for (int val = 32; val <= 126; ++val) {
+                nfa->addTransition(localToGlobal[0], static_cast<unsigned char>(val), localToGlobal[p]);
+            }
+        } else {
+            unsigned char c = posToChar[p];
+            nfa->addTransition(localToGlobal[0], c, localToGlobal[p]);
+        }
+    }
+
+    // Transitions from state p > 0
+    for (int p = 1; p <= numPositions; ++p) {
+        for (int q : followpos[p]) {
+            if (dotPositions.find(q) != dotPositions.end()) { // DOT
+                for (int val = 32; val <= 126; ++val) {
+                    nfa->addTransition(localToGlobal[p], static_cast<unsigned char>(val), localToGlobal[q]);
+                }
+            } else {
+                unsigned char c = posToChar[q];
+                nfa->addTransition(localToGlobal[p], c, localToGlobal[q]);
+            }
+        }
+    }
+
+    return nfa;
+}
+
+void NFABuilder::linearize(ASTNode* node, int& posCounter, std::map<int, unsigned char>& posToChar, std::set<int>& dotPositions) {
+    if (!node) return;
+    switch (node->type) {
+        case ASTNodeType::LITERAL: {
+            auto n = static_cast<LiteralNode*>(node);
+            n->position = posCounter++;
+            posToChar[n->position] = static_cast<unsigned char>(n->value);
+            break;
+        }
+        case ASTNodeType::DOT: {
+            auto n = static_cast<DotNode*>(node);
+            n->position = posCounter++;
+            dotPositions.insert(n->position);
+            break;
+        }
+        case ASTNodeType::CONCATENATION: {
+            auto n = static_cast<ConcatenationNode*>(node);
+            linearize(n->left.get(), posCounter, posToChar, dotPositions);
+            linearize(n->right.get(), posCounter, posToChar, dotPositions);
+            break;
+        }
+        case ASTNodeType::UNION: {
+            auto n = static_cast<UnionNode*>(node);
+            linearize(n->left.get(), posCounter, posToChar, dotPositions);
+            linearize(n->right.get(), posCounter, posToChar, dotPositions);
+            break;
+        }
+        case ASTNodeType::STAR: {
+            auto n = static_cast<StarNode*>(node);
+            linearize(n->inner.get(), posCounter, posToChar, dotPositions);
+            break;
+        }
+        case ASTNodeType::PLUS: {
+            auto n = static_cast<PlusNode*>(node);
+            linearize(n->inner.get(), posCounter, posToChar, dotPositions);
+            break;
+        }
+        case ASTNodeType::OPTIONAL: {
+            auto n = static_cast<OptionalNode*>(node);
+            linearize(n->inner.get(), posCounter, posToChar, dotPositions);
+            break;
+        }
+    }
+}
+
+void NFABuilder::computeNullableFirstLast(ASTNode* node) {
+    if (!node) return;
+    switch (node->type) {
+        case ASTNodeType::LITERAL: {
+            auto n = static_cast<LiteralNode*>(node);
+            n->nullable = false;
+            n->firstpos = {n->position};
+            n->lastpos = {n->position};
+            break;
+        }
+        case ASTNodeType::DOT: {
+            auto n = static_cast<DotNode*>(node);
+            n->nullable = false;
+            n->firstpos = {n->position};
+            n->lastpos = {n->position};
+            break;
+        }
+        case ASTNodeType::CONCATENATION: {
+            auto n = static_cast<ConcatenationNode*>(node);
+            computeNullableFirstLast(n->left.get());
+            computeNullableFirstLast(n->right.get());
+            n->nullable = n->left->nullable && n->right->nullable;
+            
+            n->firstpos = n->left->firstpos;
+            if (n->left->nullable) {
+                n->firstpos.insert(n->right->firstpos.begin(), n->right->firstpos.end());
+            }
+            
+            n->lastpos = n->right->lastpos;
+            if (n->right->nullable) {
+                n->lastpos.insert(n->left->lastpos.begin(), n->left->lastpos.end());
+            }
+            break;
+        }
+        case ASTNodeType::UNION: {
+            auto n = static_cast<UnionNode*>(node);
+            computeNullableFirstLast(n->left.get());
+            computeNullableFirstLast(n->right.get());
+            n->nullable = n->left->nullable || n->right->nullable;
+            
+            n->firstpos = n->left->firstpos;
+            n->firstpos.insert(n->right->firstpos.begin(), n->right->firstpos.end());
+            
+            n->lastpos = n->left->lastpos;
+            n->lastpos.insert(n->right->lastpos.begin(), n->right->lastpos.end());
+            break;
+        }
+        case ASTNodeType::STAR: {
+            auto n = static_cast<StarNode*>(node);
+            computeNullableFirstLast(n->inner.get());
+            n->nullable = true;
+            n->firstpos = n->inner->firstpos;
+            n->lastpos = n->inner->lastpos;
+            break;
+        }
+        case ASTNodeType::PLUS: {
+            auto n = static_cast<PlusNode*>(node);
+            computeNullableFirstLast(n->inner.get());
+            n->nullable = n->inner->nullable;
+            n->firstpos = n->inner->firstpos;
+            n->lastpos = n->inner->lastpos;
+            break;
+        }
+        case ASTNodeType::OPTIONAL: {
+            auto n = static_cast<OptionalNode*>(node);
+            computeNullableFirstLast(n->inner.get());
+            n->nullable = true;
+            n->firstpos = n->inner->firstpos;
+            n->lastpos = n->inner->lastpos;
+            break;
+        }
+    }
+}
+
+void NFABuilder::computeFollowpos(ASTNode* node, std::map<int, std::set<int>>& followpos) {
+    if (!node) return;
+    switch (node->type) {
+        case ASTNodeType::CONCATENATION: {
+            auto n = static_cast<ConcatenationNode*>(node);
+            computeFollowpos(n->left.get(), followpos);
+            computeFollowpos(n->right.get(), followpos);
+            for (int p : n->left->lastpos) {
+                followpos[p].insert(n->right->firstpos.begin(), n->right->firstpos.end());
+            }
+            break;
+        }
+        case ASTNodeType::STAR: {
+            auto n = static_cast<StarNode*>(node);
+            computeFollowpos(n->inner.get(), followpos);
+            for (int p : n->inner->lastpos) {
+                followpos[p].insert(n->inner->firstpos.begin(), n->inner->firstpos.end());
+            }
+            break;
+        }
+        case ASTNodeType::PLUS: {
+            auto n = static_cast<PlusNode*>(node);
+            computeFollowpos(n->inner.get(), followpos);
+            for (int p : n->inner->lastpos) {
+                followpos[p].insert(n->inner->firstpos.begin(), n->inner->firstpos.end());
+            }
+            break;
+        }
+        case ASTNodeType::UNION: {
+            auto n = static_cast<UnionNode*>(node);
+            computeFollowpos(n->left.get(), followpos);
+            computeFollowpos(n->right.get(), followpos);
+            break;
+        }
+        case ASTNodeType::OPTIONAL: {
+            auto n = static_cast<OptionalNode*>(node);
+            computeFollowpos(n->inner.get(), followpos);
+            break;
+        }
+        default: break;
+    }
+}
+</file>
+
+<file path="src/nfa.h">
+#ifndef NFA_H
+#define NFA_H
+
+#include <vector>
+#include <set>
+#include <map>
+#include <memory>
+#include "parser.h"
+
+struct NFAState {
+    int id;
+    bool isAccept;
+    // Map from character to set of destination state IDs
+    std::map<unsigned char, std::set<int>> transitions;
+
+    explicit NFAState(int id, bool isAccept = false) : id(id), isAccept(isAccept) {}
+};
+
+class NFA {
+public:
+    int regexIndex;
+    int startStateId;
+    std::map<int, NFAState> states;
+
+    explicit NFA(int idx) : regexIndex(idx), startStateId(-1) {}
+    void addState(int id, bool isAccept = false);
+    void addTransition(int fromId, unsigned char c, int toId);
+    bool simulate(const std::string& input) const;
+};
+
+class NFABuilder {
+public:
+    // Global state counter to ensure unique IDs across all NFAs
+    static int globalStateCounter;
+
+    static std::unique_ptr<NFA> build(ASTNode* root, int regexIdx);
+
+private:
+    static void linearize(ASTNode* node, int& posCounter, std::map<int, unsigned char>& posToChar, std::set<int>& dotPositions);
+    static void computeNullableFirstLast(ASTNode* node);
+    static void computeFollowpos(ASTNode* node, std::map<int, std::set<int>>& followpos);
+};
+
+#endif // NFA_H
+</file>
+
+<file path="src/parser.cpp">
+#include "parser.h"
+#include <stdexcept>
+
+std::string nodeTypeToString(ASTNodeType type) {
+    switch (type) {
+        case ASTNodeType::LITERAL:       return "LITERAL";
+        case ASTNodeType::DOT:           return "DOT";
+        case ASTNodeType::CONCATENATION: return "CONCATENATION";
+        case ASTNodeType::UNION:         return "UNION";
+        case ASTNodeType::STAR:          return "STAR";
+        case ASTNodeType::PLUS:          return "PLUS";
+        case ASTNodeType::OPTIONAL:      return "OPTIONAL";
+        default:                         return "UNKNOWN";
+    }
+}
+
+Parser::Parser(const std::vector<Token>& tokens) : tokens(tokens), pos(0) {}
+
+std::unique_ptr<ASTNode> Parser::parse() {
+    auto root = parseExpression();
+    if (!isAtEnd() && peek().type != TokenType::END_OF_INPUT) {
+        error("Unexpected token at end of expression: " + tokenTypeToString(peek().type));
+    }
+    return root;
+}
+
+// Expression -> Term ( '|' Term )*
+std::unique_ptr<ASTNode> Parser::parseExpression() {
+    if (check(TokenType::PIPE)) {
+        error("Empty alternation branch (missing left side)");
+    }
+    auto left = parseTerm();
+
+    while (match(TokenType::PIPE)) {
+        if (isAtEnd() || peek().type == TokenType::RPAREN || peek().type == TokenType::PIPE || peek().type == TokenType::END_OF_INPUT) {
+            error("Empty alternation branch");
+        }
+        auto right = parseTerm();
+        left = std::make_unique<UnionNode>(std::move(left), std::move(right));
+    }
+
+    return left;
+}
+
+// Term -> Factor+
+std::unique_ptr<ASTNode> Parser::parseTerm() {
+    auto node = parseFactor();
+
+    while (!isAtEnd() && 
+           peek().type != TokenType::PIPE && 
+           peek().type != TokenType::RPAREN && 
+           peek().type != TokenType::END_OF_INPUT) {
+        auto next = parseFactor();
+        node = std::make_unique<ConcatenationNode>(std::move(node), std::move(next));
+    }
+
+    return node;
+}
+
+// Factor -> Atom ( '*' | '+' | '?' )?
+std::unique_ptr<ASTNode> Parser::parseFactor() {
+    auto node = parseAtom();
+
+    if (match(TokenType::STAR)) {
+        node = std::make_unique<StarNode>(std::move(node));
+    } else if (match(TokenType::PLUS)) {
+        node = std::make_unique<PlusNode>(std::move(node));
+    } else if (match(TokenType::QUESTION)) {
+        node = std::make_unique<OptionalNode>(std::move(node));
+    }
+
+    return node;
+}
+
+// Atom -> LITERAL | DOT | '(' Expression ')'
+std::unique_ptr<ASTNode> Parser::parseAtom() {
+    if (match(TokenType::LITERAL)) {
+        return std::make_unique<LiteralNode>(tokens[pos - 1].value);
+    }
+
+    if (match(TokenType::DOT)) {
+        return std::make_unique<DotNode>();
+    }
+
+    if (match(TokenType::LPAREN)) {
+        auto node = parseExpression();
+        if (!match(TokenType::RPAREN)) {
+            error("Unmatched parenthesis: expected ')'");
+        }
+        return node;
+    }
+
+    if (peek().type == TokenType::STAR || peek().type == TokenType::PLUS || peek().type == TokenType::QUESTION) {
+        error("Quantifier '" + tokenTypeToString(peek().type) + "' applied to nothing");
+    }
+
+    error("Unexpected token: " + tokenTypeToString(peek().type));
+    return nullptr; // Should not reach here
+}
+
+const Token& Parser::peek() const {
+    return tokens[pos];
+}
+
+const Token& Parser::advance() {
+    if (!isAtEnd()) pos++;
+    return tokens[pos - 1];
+}
+
+bool Parser::match(TokenType type) {
+    if (check(type)) {
+        advance();
+        return true;
+    }
+    return false;
+}
+
+bool Parser::check(TokenType type) const {
+    if (isAtEnd()) return false;
+    return peek().type == type;
+}
+
+bool Parser::isAtEnd() const {
+    return pos >= tokens.size() || tokens[pos].type == TokenType::END_OF_INPUT;
+}
+
+void Parser::error(const std::string& message) const {
+    const Token& t = peek();
+    throw std::runtime_error(message + " at line " + std::to_string(t.line) + ", column " + std::to_string(t.column));
+}
+</file>
+
+<file path="src/parser.h">
+#ifndef PARSER_H
+#define PARSER_H
+
+#include <memory>
+#include <vector>
+#include <set>
+#include "lexer.h"
+
+enum class ASTNodeType {
+    LITERAL,
+    DOT,
+    CONCATENATION,
+    UNION,
+    STAR,
+    PLUS,
+    OPTIONAL
+};
+
+class ASTNode {
+public:
+    ASTNodeType type;
+    virtual ~ASTNode() = default;
+
+    // The following fields are populated by the NFA builder (Stage 2), NOT the parser.
+    bool nullable = false;
+    std::set<int> firstpos;
+    std::set<int> lastpos;
+
+    explicit ASTNode(ASTNodeType t) : type(t) {}
+};
+
+std::string nodeTypeToString(ASTNodeType type);
+
+class LiteralNode : public ASTNode {
+public:
+    char value;
+    int position; // Used for Glushkov's construction
+    explicit LiteralNode(char v) : ASTNode(ASTNodeType::LITERAL), value(v), position(-1) {}
+};
+
+class DotNode : public ASTNode {
+public:
+    int position; // Used for Glushkov's construction
+    DotNode() : ASTNode(ASTNodeType::DOT), position(-1) {}
+};
+
+class ConcatenationNode : public ASTNode {
+public:
+    std::unique_ptr<ASTNode> left;
+    std::unique_ptr<ASTNode> right;
+    ConcatenationNode(std::unique_ptr<ASTNode> l, std::unique_ptr<ASTNode> r)
+        : ASTNode(ASTNodeType::CONCATENATION), left(std::move(l)), right(std::move(r)) {}
+};
+
+class UnionNode : public ASTNode {
+public:
+    std::unique_ptr<ASTNode> left;
+    std::unique_ptr<ASTNode> right;
+    UnionNode(std::unique_ptr<ASTNode> l, std::unique_ptr<ASTNode> r)
+        : ASTNode(ASTNodeType::UNION), left(std::move(l)), right(std::move(r)) {}
+};
+
+class StarNode : public ASTNode {
+public:
+    std::unique_ptr<ASTNode> inner;
+    explicit StarNode(std::unique_ptr<ASTNode> i)
+        : ASTNode(ASTNodeType::STAR), inner(std::move(i)) {}
+};
+
+class PlusNode : public ASTNode {
+public:
+    std::unique_ptr<ASTNode> inner;
+    explicit PlusNode(std::unique_ptr<ASTNode> i)
+        : ASTNode(ASTNodeType::PLUS), inner(std::move(i)) {}
+};
+
+class OptionalNode : public ASTNode {
+public:
+    std::unique_ptr<ASTNode> inner;
+    explicit OptionalNode(std::unique_ptr<ASTNode> i)
+        : ASTNode(ASTNodeType::OPTIONAL), inner(std::move(i)) {}
+};
+
+class Parser {
+public:
+    explicit Parser(const std::vector<Token>& tokens);
+    std::unique_ptr<ASTNode> parse();
+
+private:
+    const std::vector<Token>& tokens;
+    size_t pos;
+
+    std::unique_ptr<ASTNode> parseExpression();   // Union
+    std::unique_ptr<ASTNode> parseTerm();         // Concatenation
+    std::unique_ptr<ASTNode> parseFactor();       // Quantifiers
+    std::unique_ptr<ASTNode> parseAtom();         // Literals, Dot, Parens
+
+    const Token& peek() const;
+    const Token& advance();
+    bool match(TokenType type);
+    bool check(TokenType type) const;
+    bool isAtEnd() const;
+
+    void error(const std::string& message) const;
+};
+
+#endif // PARSER_H
+</file>
+
+<file path="src/table_gen.cpp">
+#include "table_gen.h"
+#include <fstream>
+#include <iostream>
+#include <map>
+#include <set>
+#include <algorithm>
+#include <filesystem>
+
+void TableGen::generate(const std::vector<std::unique_ptr<NFA>> &nfas,
+                        const std::string &outputDir)
+{
+    if (nfas.empty())
+    {
+        std::cerr << "No NFAs to generate table for." << std::endl;
+        return;
+    }
+
+    const NFA &nfa = *nfas[0];
+    std::filesystem::path dir(outputDir);
+    std::filesystem::create_directories(dir);
+    auto filePath = dir / "regex.bin";
+    
+    std::ofstream out(filePath, std::ios::binary);
+    if (!out.is_open())
+    {
+        std::cerr << "Could not open " << filePath << " for writing." << std::endl;
+        return;
+    }
+
+    // Map global state IDs to 0-15
+    std::map<int, int> globalToLocal;
+    int nextLocal = 0;
+
+    // Start state must be local 0
+    globalToLocal[nfa.startStateId] = nextLocal++;
+
+    for (auto const& [id, state] : nfa.states) {
+        if (id != nfa.startStateId) {
+            if (nextLocal < 16) {
+                globalToLocal[id] = nextLocal++;
+            }
+        }
+    }
+
+    // 1. Bytes 0-1: accept_mask (16-bit, Little-Endian)
+    uint16_t accept_mask = 0;
+    for (auto const& [id, state] : nfa.states) {
+        if (state.isAccept && globalToLocal.count(id)) {
+            accept_mask |= (1 << globalToLocal[id]);
+        }
+    }
+    out.put(static_cast<char>(accept_mask & 0xFF));
+    out.put(static_cast<char>((accept_mask >> 8) & 0xFF));
+
+    // 2. Bytes 2-4097: transitions (16 states * 128 chars * 2 bytes/mask)
+    for (int s = 0; s < 16; ++s) {
+        // Find the global ID for this local state
+        int globalId = -1;
+        for (auto const& [g, l] : globalToLocal) {
+            if (l == s) {
+                globalId = g;
+                break;
+            }
+        }
+
+        for (int c = 0; c < 128; ++c) {
+            uint16_t next_state_mask = 0;
+            if (globalId != -1) {
+                const auto& state = nfa.states.at(globalId);
+                auto it = state.transitions.find(static_cast<unsigned char>(c));
+                if (it != state.transitions.end()) {
+                    for (int dstGlobalId : it->second) {
+                        if (globalToLocal.count(dstGlobalId)) {
+                            next_state_mask |= (1 << globalToLocal[dstGlobalId]);
+                        }
+                    }
+                }
+            }
+            // Write Little-Endian
+            out.put(static_cast<char>(next_state_mask & 0xFF));
+            out.put(static_cast<char>((next_state_mask >> 8) & 0xFF));
+        }
+    }
+
+    std::cout << "Successfully generated " << filePath << " (size: " << out.tellp() << " bytes)" << std::endl;
+    out.close();
+}
+</file>
+
+<file path="src/table_gen.h">
+#ifndef TABLE_GEN_H
+#define TABLE_GEN_H
+
+#include <vector>
+#include <string>
+#include <memory>
+#include "nfa.h"
+
+class TableGen
+{
+public:
+    TableGen() = delete;
+
+    /**
+     * @brief Generates a tightly packed binary table for a single NFA.
+     * @param nfas           Vector containing at least one NFA.
+     * @param outputPath     Path where regex.bin will be written.
+     */
+    static void generate(const std::vector<std::unique_ptr<NFA>> &nfas,
+                         const std::string &outputPath);
+};
+
+#endif // TABLE_GEN_H
+</file>
+
+<file path="README.md">
+# XIIRegexBuilder: FPGA-Accelerated Regular Expression Matching Engine
+
+Group Number: 6
+
+## 1. System Description
+
+Our project is a custom hardware accelerator for high-speed text processing. A C++ compiler translates regular expressions into parallel, one-hot encoded hardware Finite State Machines (FSMs) in Verilog. These FSMs are synthesised onto an FPGA to parse continuous ASCII character streams, bypassing the sequential bottleneck of software-based regex engines.
+
+The host PC communicates with the FPGA over a standard USB-UART serial link at 115200 baud. An included Python terminal UI (`tui.py`) lets you type strings interactively and see per-regex match results, cumulative byte counts, and per-regex hit counters rendered in a colour-coded table.
+
+## 2. Use Cases
+
+- **FIX Protocol Parsing**: High-speed filtering of electronic trading messages (orders/fills) to route data before it reaches the software stack.
+- **Market Data Feed Filtering**: Scanning millions of events per second to discard irrelevant instrument data at line-rate, saving CPU cycles.
+- **Trade Surveillance**: Detecting malicious network patterns (e.g., spoofing, wash trading) continuously across live, high-speed data flows.
+
+## 3. FPGA Relevance
+
+- **Massive Parallelism**: An FPGA evaluates all N regex FSMs simultaneously in a single clock cycle, whereas software throughput degrades linearly as N grows.
+- **Strict Determinism**: Hardware matching ensures a fixed, predictable number of clock cycles per match, eliminating OS scheduling and cache-miss latency variations.
+
+## 4. System Architecture
+
+```text
+[Host PC]
+    │  USB-UART 115200-8N1
+    ▼
+uart_rx  ──►  uart_rx_fifo (16-byte circular FIFO)
+                   │
+                   ▼
+             Control FSM  ──►  top.v  (parallel NFA engine)
+                   │                │
+                   │           match_bus[N-1:0]
+                   │           byte_count[31:0]
+                   │           match_count_k[15:0]
+                   ▼
+             TX Serializer  ──►  uart_tx  ──►  [Host PC]
+```
+
+### Hardware Modules
+
+| File                    | Description                                                         |
+| ----------------------- | ------------------------------------------------------------------- |
+| `output/uart_tx.v`      | 8-N-1 UART transmitter (parallel-in / serial-out)                   |
+| `output/uart_rx_fifo.v` | 16-byte circular FIFO (distributed RAM) between RX and engine       |
+| `output/top_fpga.v`     | Top-level integrating FIFO, NFA engine, counters, TX serializer FSM |
+
+### Response Packet (FPGA → Host)
+
+Every time the NFA engine finishes a string (newline received), the FPGA sends one ASCII line:
+
+```text
+MATCH=<N-bit binary> BYTES=<8 hex digits> HITS=<4hex per regex, comma-separated>\r\n
+```
+
+Example (6 regexes, regexes 0 and 2 matched, 71 total bytes processed):
+
+```text
+MATCH=000101 BYTES=00000047 HITS=0003,0001,0012,0000,0000,0000
+```
+
+Send `?` at any time to query the current counters without feeding any character to the NFA.
+
+### Hardware Counters
+
+- `byte_count [31:0]` — total bytes fed into the NFA engine since the last reset.
+- `match_count_k [15:0]` — cumulative match events for regex _k_ (independent counter per regex).
+
+## 5. System Scope
+
+### Minimum System (Commitment)
+
+- C++ Verilog Emitter compiling basic literal and concatenation patterns (e.g., abc).
+- At least one generated Verilog FSM successfully simulated and executing correctly on the FPGA.
+
+### Goal System — **ACHIEVED**
+
+- Full compiler support for complex operators (`*`, `+`, `?`, `|`, `.`) via Glushkov's epsilon-free construction.
+- Integration of up to 16 parallel FSM modules passing the C++ golden reference testbenches.
+- UART host-side controller: host application sends arbitrary test strings and receives match bitmasks over serial in real time.
+- **UART Transmitter** (`uart_tx.v`): dedicated TX module with a serializer state machine that formats and sends structured ASCII result packets.
+- **Input FIFO Buffer** (`uart_rx_fifo.v`): 16-byte circular FIFO decouples the UART receiver from the NFA engine FSM, eliminating byte-drop risk.
+- **Hardware Counters**: `byte_count` and per-regex `match_count` registers, queryable via UART or the Python TUI.
+
+### Stretch Goal
+
+- Bounded quantifiers `{m,n}`: compiler and hardware support for repetition counts.
+- Live FIX message demo: stream a recorded FIX log from the host and demonstrate real-time field extraction.
+
+## 6. Design Goals
+
+- **Latency**: 1 clock cycle per ASCII character; match output registered on the cycle immediately following `end_of_str` assertion.
+- **Throughput**: 1 byte per clock cycle continuously (100 MB/s at 100 MHz).
+- **Resource usage**: Efficient one-hot state encoding (exactly N+1 flip-flops per FSM).
+- **Correctness**: 100% full-match accuracy against the C++ `std::regex` golden reference.
+
+## 7. Quick Start
+
+### Build the C++ compiler and generate Verilog
+
+```bash
+make run   # builds regex_builder, runs it on inputs/regexes.txt
+```
+
+### Simulate in Vivado
+
+```bash
+make sim   # xvlog + xelab + xsim
+```
+
+### Synthesise and program the Nexys A7
+
+```bash
+make synth    # runs synth.tcl through Vivado batch mode
+make program  # programs the attached FPGA
+```
+
+### Launch the Python TUI
+
+```bash
+pip install pyserial rich
+python tui.py --port /dev/ttyUSB0 --regexes inputs/regexes.txt
+# On Windows: python tui.py --port COM3 --regexes inputs/regexes.txt
+```
+
+The TUI auto-detects the first available USB-Serial port if `--port` is omitted.
+
+## 8. File Layout
+
+```text
+XIIRegexBuilder/
+├── inputs/
+│   ├── regexes.txt          # one regex per line
+│   └── test_strings.txt     # one test string per line
+├── src/
+│   ├── main.cpp             # pipeline entry point
+│   ├── lexer.{h,cpp}        # tokeniser
+│   ├── parser.{h,cpp}       # recursive-descent AST builder
+│   ├── nfa.{h,cpp}          # Glushkov NFA construction
+│   ├── emitter.{h,cpp}      # Verilog code generator
+│   ├── golden.cpp           # C++ std::regex reference
+│   └── parser_tester.cpp    # unit-test harness
+├── output/                  # generated by `make run`
+│   ├── nfa_0.v … nfa_N.v
+│   ├── top.v
+│   ├── uart_rx.v            # UART receiver
+│   ├── uart_tx.v            # UART transmitter
+│   ├── uart_rx_fifo.v       # Input FIFO
+│   ├── top_fpga.v           # FPGA top-level
+│   ├── tb_top.v
+│   ├── constraints.xdc
+│   └── expected_matches.txt
+├── tui.py                   # Python TUI
+├── scripts/
+│   ├── synth.tcl            # Vivado synthesis script
+│   └── program.tcl          # Vivado programming script
+├── Makefile
+├── README.md
+├── Specifications.md
+├── details.md
+└── usecase.md
+```
+</file>
+
+<file path="inputs/regexes.txt">
+# Sample Regex Input File
+# One regex per line
+
+cat
+c.t
+do*g
+be+p
+fl?y
+apple|orange
+(red|blue)car
+lo(lo)*
+go(od)+
+(he)?llo
+a(b|c)*d
+.*end
+.+end
+(x.y)+
+(a|b)(c|d)
+1(23)?4
+</file>
+
+<file path="inputs/test_strings.txt">
+# Test Strings
+# Each line is a test string
+cat
+dog
+tomcat
+cot
+cut
+ct
+doog
+dg
+beep
+bep
+bp
+fly
+fy
+apple
+orange
+banana
+redcar
+bluecar
+greencar
+lolo
+lololo
+lo
+good
+goodod
+go
+hello
+llo
+he
+ad
+abd
+acd
+abcd
+the end
+end
+xay
+xayxby
+xy
+ac
+bd
+bc
+1234
+14
+124
+</file>
+
+<file path="output-eg/dynamic_nfa.v">
+`timescale 1ns / 1ps
+
+module dynamic_nfa #(
+    parameter MAX_STATES = 16,
+    parameter ALPHABET_SIZE = 128
+)(
+    input clk,
+    input reset,
+    input en,
+    input restart,    // Added for system integration
+    input [7:0] char_in,
+    
+    // Programming Interface
+    input prog_en,
+    input [3:0] prog_state_id,
+    input [6:0] prog_char,
+    input [15:0] prog_mask,
+    input [15:0] prog_accept_mask_in,
+    input prog_accept_en,
+    
+    output match_out,
+    output ready      // Added for system integration
+);
+
+    // Memory: 16 states * 128 characters
+    reg [MAX_STATES-1:0] trans_ram [0:MAX_STATES-1][0:ALPHABET_SIZE-1];
+    reg [MAX_STATES-1:0] accept_mask;
+    reg [MAX_STATES-1:0] current_states;
+
+    // FSM States
+    localparam IDLE    = 2'd0;
+    localparam PROCESS = 2'd1;
+    localparam FINISH  = 2'd2;
+
+    reg [1:0] state;
+    reg [4:0] read_idx;
+    reg [4:0] accum_idx;
+    reg [15:0] next_states_accum;
+    reg [15:0] ram_read_data;
+
+    // BRAM Read Block
+    always @(posedge clk) begin
+        // Programming Interface write logic
+        if (prog_en) begin
+            trans_ram[prog_state_id][prog_char] <= prog_mask;
+        end
+        // Synchronous read for execution
+        if (state == PROCESS) begin
+            ram_read_data <= trans_ram[read_idx[3:0]][char_in[6:0]];
+        end
+    end
+
+    // State Machine Block
+    always @(posedge clk) begin
+        if (reset) begin
+            state <= IDLE;
+            current_states <= 16'd1;
+            accept_mask <= 16'd0;
+            read_idx <= 0;
+            accum_idx <= 0;
+            next_states_accum <= 0;
+        end else if (restart) begin
+            current_states <= 16'd1;
+            state <= IDLE;
+        end else if (prog_accept_en) begin
+            accept_mask <= prog_accept_mask_in;
+        end else begin
+            case (state)
+                IDLE: begin
+                    if (en) begin
+                        state <= PROCESS;
+                        read_idx <= 0;
+                        accum_idx <= 0;
+                        next_states_accum <= 0;
+                    end
+                end
+
+                PROCESS: begin
+                    // Increment read_idx for the next cycle's RAM fetch
+                    read_idx <= read_idx + 5'd1;
+
+                    // RAM data is ready one cycle after the address is set.
+                    // Cycle 1: read_idx is 1, ram_read_data contains data for State 0.
+                    if (read_idx > 5'd0) begin
+                        if (current_states[accum_idx[3:0]]) begin
+                            next_states_accum <= next_states_accum | ram_read_data;
+                        end
+                        
+                        // Check if we just processed the last state (15)
+                        if (accum_idx == MAX_STATES - 1) begin
+                            state <= FINISH;
+                        end
+                        
+                        accum_idx <= accum_idx + 5'd1;
+                    end
+                end
+
+                FINISH: begin
+                    current_states <= next_states_accum;
+                    state <= IDLE;
+                end
+
+                default: state <= IDLE;
+            endcase
+        end
+    end
+
+    // Match Output and Ready signals
+    assign match_out = (current_states & accept_mask) != 0;
+    assign ready = (state == IDLE);
+
+endmodule
+</file>
+
+<file path="src/main.cpp">
+#include <iostream>
+#include <fstream>
+#include <string>
+#include <vector>
+#include <memory>
+#include <regex>
+#include <algorithm>
+#include "lexer.h"
+#include "parser.h"
+#include "nfa.h"
+#include "table_gen.h"
+
+std::string trim(const std::string& str) {
+    size_t first = str.find_first_not_of(" \t\r\n");
+    if (first == std::string::npos) return "";
+    size_t last = str.find_last_not_of(" \t\r\n");
+    return str.substr(first, (last - first + 1));
+}
+
+int main(int argc, char* argv[]) {
+    if (argc < 2) {
+        std::cerr << "Usage: " << argv[0] << " <regex_file> [test_strings_file] [output_dir]" << std::endl;
+        return 1;
+    }
+
+    std::string regexFilename = argv[1];
+    std::string testFilename = (argc > 2) ? argv[2] : "";
+    std::string outputDir = (argc > 3) ? argv[3] : "output";
+
+    if (testFilename == "-" || testFilename == "none") {
+        testFilename = "";
+    }
+
+    std::ifstream regexFile(regexFilename);
+    if (!regexFile.is_open()) {
+        std::cerr << "Failed to open regex file: " << regexFilename << std::endl;
+        return 1;
+    }
+
+    std::string line;
+    int lineNum = 0;
+    int regexIdx = 0;
+    std::vector<std::unique_ptr<NFA>> nfas;
+
+    std::cout << "Starting XIIRegexBuilder pipeline (Dynamic NFA Table Generation)..." << std::endl;
+
+    while (std::getline(regexFile, line)) {
+        lineNum++;
+        std::string trimmedLine = trim(line);
+        if (trimmedLine.empty() || trimmedLine[0] == '#') continue;
+
+        if (regexIdx >= 1) {
+            std::cout << "Skipping regex at line " << lineNum << ": Only 1 regex supported in dynamic mode." << std::endl;
+            continue;
+        }
+
+        std::cout << "Processing Regex [" << regexIdx << "]: " << trimmedLine << std::endl;
+
+        Lexer lexer(trimmedLine, lineNum);
+        try {
+            std::vector<Token> tokens = lexer.tokenize();
+            Parser parser(tokens);
+            auto ast = parser.parse();
+            auto nfa = NFABuilder::build(ast.get(), regexIdx);
+            if (nfa) {
+                nfas.push_back(std::move(nfa));
+                regexIdx++;
+            }
+        } catch (const std::exception& e) {
+            std::cerr << "Error parsing regex: " << e.what() << std::endl;
+        }
+    }
+
+    if (nfas.empty()) {
+        std::cerr << "No valid regexes found. Exiting." << std::endl;
+        return 1;
+    }
+
+    std::cout << "Generated " << nfas.size() << " NFA. Generating binary table..." << std::endl;
+
+    try {
+        TableGen::generate(nfas, outputDir);
+        std::cout << "Pipeline complete. Binary table generated in '" << outputDir << "/'" << std::endl;
+    } catch (const std::exception& e) {
+        std::cerr << "Error during table generation: " << e.what() << std::endl;
+        return 1;
+    }
+
+    return 0;
+}
+</file>
+
+<file path=".gitignore">
+# Prerequisites
+*.d
+
+# Compiled Object files
+*.slo
+*.lo
+*.o
+*.obj
+
+# Precompiled Headers
+*.gch
+*.pch
+
+# Linker files
+*.ilk
+
+# Debugger Files
+*.pdb
+
+# Compiled Dynamic libraries
+*.so
+*.dylib
+*.dll
+
+# Fortran module files
+*.mod
+*.smod
+
+# Compiled Static libraries
+*.lai
+*.la
+*.a
+*.lib
+
+# Executables
+*.exe
+*.out
+*.app
+
+# Debug information
+*.dwo
+output/
+
+# Final Executable
+build/
+
+# Vivado Files
+*.bit
+*.jou
+*.log
+*.pb
+clockInfo.txt
+dfx_runtime.txt
+.Xil/
+
+# Python TUI
+.venv
+</file>
+
+<file path="Makefile">
+################################
+# Makefile for XIIRegexBuilder #
+################################
+
+# OS Detection
+ifeq ($(OS),Windows_NT)
+    EXE := .exe
+    RM := del /f /q
+    RMDIR := rmdir /s /q
+    MKDIR = if not exist $(subst /,\,$1) mkdir $(subst /,\,$1)
+    FIX_PATH = $(subst /,\,$1)
+else
+    EXE :=
+    RM := rm -f
+    RMDIR := rm -rf
+    MKDIR = mkdir -p $1
+    FIX_PATH = $1
+endif
+
+CC = g++
+CFLAGS = -Wall -Wextra -std=c++17 -Isrc -static
+BUILD_DIR = build
+TARGET = $(BUILD_DIR)/regex_builder$(EXE)
+TESTER = $(BUILD_DIR)/nfa_tester$(EXE)
+GOLDEN = $(BUILD_DIR)/golden$(EXE)
+SRCS = src/main.cpp src/lexer.cpp src/parser.cpp src/nfa.cpp src/table_gen.cpp
+TEST_SRCS = src/lexer.cpp src/parser.cpp src/nfa.cpp
+GOLDEN_SRCS =
+OBJS = $(SRCS:.cpp=.o)
+TEST_OBJS = $(TEST_SRCS:.cpp=.o)
+GOLDEN_OBJS = $(GOLDEN_SRCS:.cpp=.o)
+
+INPUT_DIR = inputs
+OUTPUT_DIR = output
+
+# Vivado Simulation Tools
+VIVADO_PATH = vivado
+XVLOG = xvlog
+XELAB = xelab
+XSIM  = xsim
+SIM_TOP = tb_top
+SNAPSHOT = regex_sim
+
+all: $(TARGET) $(GOLDEN)
+
+$(TARGET): $(OBJS) | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -o $(TARGET) $(OBJS)
+
+$(TESTER): $(TEST_OBJS) | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -o $(TESTER) $(TEST_OBJS)
+
+$(GOLDEN): $(GOLDEN_OBJS) | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -o $(GOLDEN) $(GOLDEN_OBJS)
+
+$(BUILD_DIR):
+	$(call MKDIR,$(BUILD_DIR))
+
+$(OUTPUT_DIR):
+	$(call MKDIR,$(OUTPUT_DIR))
+
+%.o: %.cpp
+	$(CC) $(CFLAGS) -c $< -o $@
+
+run: all | $(OUTPUT_DIR)
+	$(TARGET) $(INPUT_DIR)/regexes.txt $(INPUT_DIR)/test_strings.txt $(OUTPUT_DIR)
+
+test: $(TESTER)
+	$(TESTER) $(INPUT_DIR)/regexes.txt $(INPUT_DIR)/test_strings.txt
+
+
+golden: $(GOLDEN) | $(OUTPUT_DIR)
+	$(GOLDEN) $(INPUT_DIR)/regexes.txt $(INPUT_DIR)/test_strings.txt $(OUTPUT_DIR)/expected_matches.txt
+
+sim: run
+	@echo "1. Compiling Verilog files..."
+	$(XVLOG) $(OUTPUT_DIR)/*.v 
+	@echo "2. Elaborating design..."
+	$(XELAB) -top $(SIM_TOP) -snapshot $(SNAPSHOT) -debug typical
+	@echo "3. Running simulation..."
+	$(XSIM) $(SNAPSHOT) -R
+
+# FPGA Targets
+synth: run
+	@echo "Launching Vivado Synthesis Flow..."
+	$(VIVADO_PATH) -mode batch -source $(call FIX_PATH,scripts/synth.tcl)
+
+program:
+	@echo "Launching Vivado Programming Flow..."
+	$(VIVADO_PATH) -mode batch -source $(call FIX_PATH,scripts/program.tcl)
+
+
+clean:
+	-$(RM) $(call FIX_PATH,src/*.o)
+	-$(RMDIR) $(call FIX_PATH,$(BUILD_DIR))
+	-$(RMDIR) $(call FIX_PATH,$(OUTPUT_DIR))
+	-$(RM) *.bit *.log *.jou *.pb *.wdb *.str usage_statistics_webtalk.*
+	-$(RM) clockInfo.txt dfx_runtime.txt
+	-$(RMDIR) xsim.dir .Xil
+
+.PHONY: all run test golden clean
+</file>
+
+<file path="output-eg/top_fpga.v">
+`timescale 1ns / 1ps
+
+module top_fpga #(
+    parameter CLKS_PER_BIT = 868,
+    parameter PROG_TOTAL_BYTES = 4098
+)(
+    input  wire clk,
+    input  wire rst_btn,
+    input  wire uart_rx_pin,
+    output wire uart_tx_pin,
+    output wire [15:0] match_leds
+);
+
+    // UART RX
+    wire [7:0] rx_data;
+    wire       rx_ready;
+    uart_rx #(.CLKS_PER_BIT(CLKS_PER_BIT)) uart_rx_inst (
+        .clk     (clk),
+        .rx      (uart_rx_pin),
+        .rx_data (rx_data),
+        .rx_ready(rx_ready)
+    );
+
+    // Input FIFO
+    wire [7:0] fifo_rd_data;
+    wire       fifo_empty;
+    wire       fifo_full;
+    reg        fifo_rd_en = 1'b0;
+    uart_rx_fifo #(.DEPTH_LOG2(4)) rx_fifo (
+        .clk    (clk),
+        .rst    (rst_btn),
+        .wr_data(rx_data),
+        .wr_en  (rx_ready && !fifo_full),
+        .full   (fifo_full),
+        .rd_data(fifo_rd_data),
+        .rd_en  (fifo_rd_en),
+        .empty  (fifo_empty)
+    );
+
+    // NFA Engine
+    reg nfa_en = 0;
+    reg [7:0] nfa_char_in = 0;
+    reg prog_en = 0;
+    reg [3:0] prog_state_id = 0;
+    reg [6:0] prog_char = 0;
+    reg [15:0] prog_mask = 0;
+    reg [15:0] prog_accept_mask_in = 0;
+    reg prog_accept_en = 0;
+    wire match_out;
+
+    dynamic_nfa #(
+        .MAX_STATES(16),
+        .ALPHABET_SIZE(128)
+    ) nfa_inst (
+        .clk(clk),
+        .reset(rst_btn),
+        .en(nfa_en),
+        .char_in(nfa_char_in),
+        .prog_en(prog_en),
+        .prog_state_id(prog_state_id),
+        .prog_char(prog_char),
+        .prog_mask(prog_mask),
+        .prog_accept_mask_in(prog_accept_mask_in),
+        .prog_accept_en(prog_accept_en),
+        .match_out(match_out)
+    );
+
+    assign match_leds = {15'd0, match_out};
+
+    // UART TX (not strictly used for logic, but kept per instructions)
+    reg [7:0] tx_data_r = 0;
+    reg tx_start_r = 0;
+    wire tx_busy;
+    uart_tx #(.CLKS_PER_BIT(CLKS_PER_BIT)) uart_tx_inst (
+        .clk     (clk),
+        .rst     (rst_btn),
+        .tx_data (tx_data_r),
+        .tx_start(tx_start_r),
+        .tx_busy (tx_busy),
+        .tx      (uart_tx_pin)
+    );
+
+    // Main Control FSM
+    localparam S_IDLE      = 4'd0;
+    localparam S_FETCH     = 4'd1;
+    localparam S_DECODE    = 4'd2;
+    localparam S_EXEC_STEP = 4'd3;
+    localparam S_PROG_HDR  = 4'd4;
+    localparam S_PROG_WAIT = 4'd5;
+    localparam S_PROG_LATCH= 4'd6;
+    localparam S_PROG_DONE = 4'd7;
+
+    reg [3:0] state = S_IDLE;
+    reg [12:0] prog_byte_count = 0;
+    reg [7:0]  prog_byte_latch = 0;
+    reg [11:0] trans_idx;
+
+    always @(posedge clk) begin
+        fifo_rd_en <= 1'b0;
+        nfa_en     <= 1'b0;
+        prog_en    <= 1'b0;
+        prog_accept_en <= 1'b0;
+        tx_start_r <= 1'b0;
+
+        if (rst_btn) begin
+            state <= S_IDLE;
+            prog_byte_count <= 0;
+        end else begin
+            case (state)
+                S_IDLE: begin
+                    if (!fifo_empty) begin
+                        fifo_rd_en <= 1'b1;
+                        state <= S_FETCH;
+                    end
+                end
+
+                S_FETCH: state <= S_DECODE;
+
+                S_DECODE: begin
+                    if (fifo_rd_data == 8'hFE) begin
+                        state <= S_PROG_HDR;
+                    end else begin
+                        nfa_char_in <= fifo_rd_data;
+                        state <= S_EXEC_STEP;
+                    end
+                end
+
+                S_EXEC_STEP: begin
+                    nfa_en <= 1'b1;
+                    state  <= S_IDLE;
+                end
+
+                S_PROG_HDR: begin
+                    if (!fifo_empty) begin
+                        fifo_rd_en <= 1'b1;
+                        state <= S_PROG_WAIT;
+                    end
+                end
+
+                S_PROG_WAIT: begin
+                    // Check for second 0xFE
+                    if (fifo_rd_data == 8'hFE) begin
+                        prog_byte_count <= 0;
+                        state <= S_PROG_LATCH;
+                    end else begin
+                        // Was just one FE, process it as char if needed, or back to idle
+                        nfa_char_in <= 8'hFE;
+                        state <= S_EXEC_STEP;
+                    end
+                end
+
+                S_PROG_LATCH: begin
+                    if (!fifo_empty) begin
+                        fifo_rd_en <= 1'b1;
+                        if (prog_byte_count[0] == 0) begin
+                            prog_byte_latch <= fifo_rd_data;
+                        end else begin
+                            // Combine into 16-bit word
+                            if (prog_byte_count == 13'd1) begin
+                                prog_accept_mask_in <= {fifo_rd_data, prog_byte_latch};
+                                prog_accept_en <= 1'b1;
+                            end else begin
+                                prog_mask <= {fifo_rd_data, prog_byte_latch};
+                                prog_state_id <= (prog_byte_count - 2) >> 8; // (index / 128) * 2 byte logic
+                                // Wait, index = (prog_byte_count - 1) / 2
+                                // index = 0 -> Word 0 (Accept)
+                                // index = 1 -> Word 1 (State 0, Char 0)
+                                // word_idx = (prog_byte_count >> 1)
+                                // If word_idx == 0 -> Accept mask
+                                // If word_idx > 0:
+                                //   trans_idx = word_idx - 1
+                                //   state = trans_idx / 128
+                                //   char = trans_idx % 128
+                                begin
+                                    trans_idx = (prog_byte_count >> 1) - 1;
+                                    prog_state_id <= trans_idx[10:7]; // trans_idx / 128
+                                    prog_char     <= trans_idx[6:0];  // trans_idx % 128
+                                    prog_en <= 1'b1;
+                                end
+                            end
+
+                            if (prog_byte_count + 1 >= PROG_TOTAL_BYTES) begin
+                                state <= S_IDLE;
+                            end
+                        end
+                        prog_byte_count <= prog_byte_count + 1;
+                    end
+                end
+
+                default: state <= S_IDLE;
+            endcase
+        end
+    end
+
+endmodule
+</file>
+
+<file path="tui.py">
+#!/usr/bin/env python3
+"""
+tui.py — Interactive TUI for XIIRegexBuilder
+=====================================================================
+
+Connects to the FPGA over a serial port (115200-8N1), lets the user type
+input strings, and displays a live colour-coded table showing which of
+the N regex patterns were matched by the most recent string.
+
+Usage
+─────
+    python tui.py [--port PORT] [--baud BAUD] [--regexes FILE]
+
+    --port    Serial port (default: auto-detect first USB-Serial)
+    --baud    Baud rate   (default: 115200)
+    --regexes Path to inputs/regexes.txt for label display (optional but
+              strongly recommended — falls back to "Regex 0", "Regex 1", …)
+
+Protocol
+────────
+  Send   : "<string>\n"
+  Receive: "MATCH=<bits> BYTES=<8hexdigits> HITS=<4hex,…>\r\n"
+  Send   : "?\n"  →  receive current counter snapshot (no NFA change)
+
+Controls
+────────
+  Enter         — send current input to FPGA
+  Ctrl-C / q    — quit
+  Ctrl-P        — Program FPGA with output/regex.bin
+  Ctrl-L        — clear input line
+  ?             — query current counters without sending a string
+"""
+
+import argparse
+import sys
+import threading
+import time
+import re as _re
+import os
+
+try:
+    import serial
+    import serial.tools.list_ports
+except ImportError:
+    print("ERROR: pyserial not found. Run 'pip install pyserial'")
+    sys.exit(1)
+
+try:
+    from rich import box
+    from rich.console import Console
+    from rich.console import Group
+    from rich.live import Live
+    from rich.panel import Panel
+    from rich.table import Table
+    from rich.text import Text
+except ImportError:
+    print("ERROR: rich not found. Run 'pip install rich'")
+    sys.exit(1)
+
+# OS-specific keyboard handling
+if os.name == 'nt':
+    import msvcrt
+    def get_char():
+        if msvcrt.kbhit():
+            ch = msvcrt.getch()
+            if ch in (b'\x00', b'\xe0'):
+                ch += msvcrt.getch()
+            return ch
+        return None
+else:
+    import termios
+    import tty
+    import select
+    def get_char():
+        if select.select([sys.stdin], [], [], 0)[0]:
+            return sys.stdin.read(1).encode('ascii')
+        return None
+
+# ─────────────────────────────────────────────────────────────────────────────
+BANNER = r"""
+██╗  ██╗██╗██╗██████╗ ███████╗ ██████╗ ███████╗██╗  ██╗██████╗ ██╗   ██╗██╗██╗     ██████╗ ███████╗██████╗ 
+╚██╗██╔╝██║██║██╔══██╗██╔════╝██╔════╝ ██╔════╝╚██╗██╔╝██╔══██╗██║   ██║██║██║     ██╔══██╗██╔════╝██╔══██╗
+ ╚███╔╝ ██║██║██████╔╝█████╗  ██║  ███╗█████╗   ╚███╔╝ ██████╔╝██║   ██║██║██║     ██║  ██║█████╗  ██████╔╝
+ ██╔██╗ ██║██║██╔══██╗██╔══╝  ██║   ██║██╔══╝   ██╔██╗ ██╔══██╗██║   ██║██║██║     ██║  ██║██╔══╝  ██╔══██╗
+██╔╝ ██╗██║██║██║  ██║███████╗╚██████╔╝███████╗██╔╝ ██╗██████╔╝╚██████╔╝██║███████╗██████╔╝███████╗██║  ██║
+╚═╝  ╚═╝╚═╝╚═╝╚═╝  ╚═╝╚══════╝ ╚═════╝ ╚══════╝╚═╝  ╚═╝╚═════╝  ╚═════╝ ╚═╝╚══════╝╚═════╝ ╚══════╝╚═╝  ╚═╝
+"""
+
+RESPONSE_RE = _re.compile(
+    r"MATCH=([01]+)\s+BYTES=([0-9A-Fa-f]+)\s+HITS=([0-9A-Fa-f,]+)"
+)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+def load_regexes(path: str) -> list[str]:
+    """Parse regexes.txt — skip blank lines and comments."""
+    patterns = []
+    try:
+        with open(path) as f:
+            for line in f:
+                stripped = line.strip()
+                if stripped and not stripped.startswith("#"):
+                    patterns.append(stripped)
+    except FileNotFoundError:
+        pass
+    return patterns
+
+
+def auto_detect_port() -> str | None:
+    """Return the first USB-Serial port found, or None."""
+    for p in serial.tools.list_ports.comports():
+        desc = p.description.lower()
+        if "usb" in desc or "uart" in desc or "serial" in desc or "ftdi" in desc:
+            return p.device
+    ports = list(serial.tools.list_ports.comports())
+    return ports[0].device if ports else None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+class MatchState:
+    """Shared state between the UART reader thread and the TUI renderer."""
+
+    def __init__(self, num_regex: int):
+        self.lock = threading.Lock()
+        self.num_regex = 1 # Force 1 regex for dynamic mode
+        self.match_bits: list[int] = [0] * self.num_regex
+        self.byte_count: int = 0
+        self.hit_counts: list[int] = [0] * self.num_regex
+        self.last_string: str = ""
+        self.last_response_raw: str = ""
+        self.status_msg: str = "Waiting for first result…"
+        self.connected: bool = False
+
+    def update_from_response(self, raw: str, sent_string: str) -> bool:
+        m = RESPONSE_RE.search(raw)
+        if not m:
+            return False
+        bits_str, bytes_hex, hits_str = m.group(1), m.group(2), m.group(3)
+
+        bits_str = bits_str.zfill(self.num_regex)
+        match_bits = [int(b) for b in bits_str]
+        match_bits_ordered = list(reversed(match_bits))
+
+        hit_list = [int(h, 16) for h in hits_str.split(",")]
+        while len(hit_list) < self.num_regex:
+            hit_list.append(0)
+
+        with self.lock:
+            self.match_bits = match_bits_ordered[: self.num_regex]
+            self.byte_count = int(bytes_hex, 16)
+            self.hit_counts = hit_list[: self.num_regex]
+            self.last_string = sent_string
+            self.last_response_raw = raw.strip()
+            self.status_msg = "OK"
+        return True
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+def reader_thread(
+    ser: serial.Serial, state: MatchState, pending: list, pending_lock: threading.Lock
+) -> None:
+    """Background thread: read lines from FPGA and update state."""
+    buf = ""
+    while True:
+        try:
+            if ser.in_waiting:
+                chunk = ser.read(ser.in_waiting).decode("ascii", errors="replace")
+                buf += chunk
+                while "\n" in buf:
+                    line, buf = buf.split("\n", 1)
+                    line = line.strip()
+                    if not line:
+                        continue
+                    with pending_lock:
+                        sent = pending.pop(0) if pending else ""
+                    state.update_from_response(line, sent)
+            else:
+                time.sleep(0.01)
+        except serial.SerialException:
+            with state.lock:
+                state.status_msg = "Serial error — disconnected"
+                state.connected = False
+            break
+        except Exception:
+            pass
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+def build_match_table(state: MatchState, patterns: list[str]) -> Table:
+    """Build the live Rich table showing match results (1 Regex row)."""
+    table = Table(
+        title="[bold cyan]Regex Match Result[/bold cyan]",
+        box=box.ROUNDED,
+        expand=True,
+        show_lines=True,
+    )
+
+    with state.lock:
+        bits = state.match_bits[:]
+        hits = state.hit_counts[:]
+        n = 1 # Only 1 regex
+
+    table.add_column("#", style="dim", width=4, justify="right")
+    table.add_column("Pattern", style="white", min_width=20)
+    table.add_column("MATCH", justify="center", width=8)
+    table.add_column("Hits", justify="right", width=8)
+
+    label = patterns[0] if len(patterns) > 0 else "Dynamic Regex"
+    if len(label) > 50:
+        label = label[:47] + "..."
+    matched = bool(bits[0]) if len(bits) > 0 else False
+    hit_cnt = hits[0] if len(hits) > 0 else 0
+
+    if matched:
+        match_cell = Text("● MATCH", style="bold green")
+    else:
+        match_cell = Text("○ —", style="dim red")
+
+    table.add_row("0", f"[italic]{label}[/italic]", match_cell, f"[yellow]{hit_cnt}[/yellow]")
+
+    return table
+
+
+def build_stats_panel(state: MatchState) -> Panel:
+    with state.lock:
+        bc = state.byte_count
+        last_s = state.last_string or "(none)"
+        raw = state.last_response_raw or "—"
+        status = state.status_msg
+        conn = state.connected
+
+    conn_label = (
+        "[bold green]● CONNECTED[/bold green]"
+        if conn
+        else "[bold red]● DISCONNECTED[/bold red]"
+    )
+
+    text = (
+        f"{conn_label}\n"
+        f"[bold]Last string :[/bold] [cyan]{last_s}[/cyan]\n"
+        f"[bold]Total bytes :[/bold] {bc:,}\n"
+        f"[bold]Status      :[/bold] {status}\n"
+        f"[bold]Raw response:[/bold] [dim]{raw}[/dim]"
+    )
+    return Panel(text, title="[bold]Statistics[/bold]", border_style="blue")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+def run_tui(port: str, baud: int, patterns: list[str]) -> None:
+    console = Console()
+    num_regex = 1
+    state = MatchState(num_regex)
+
+    try:
+        ser = serial.Serial(port, baud, timeout=0.05)
+        state.connected = True
+    except serial.SerialException as e:
+        console.print(f"[red]Cannot open {port}: {e}[/red]")
+        sys.exit(1)
+
+    pending: list[str] = []
+    pending_lock = threading.Lock()
+
+    t = threading.Thread(
+        target=reader_thread, args=(ser, state, pending, pending_lock), daemon=True
+    )
+    t.start()
+
+    input_buffer = ""
+
+    def program_fpga():
+        try:
+            with state.lock:
+                state.status_msg = "Programming..."
+            
+            if not os.path.exists("output/regex.bin"):
+                with state.lock:
+                    state.status_msg = "Error: output/regex.bin not found"
+                return
+
+            with open("output/regex.bin", "rb") as f:
+                payload = f.read()
+
+            if len(payload) != 4098:
+                with state.lock:
+                    state.status_msg = f"Error: regex.bin is {len(payload)} bytes (expected 4098)"
+                return
+
+            # Send Header
+            ser.write(b'\xFE\xFE')
+            ser.flush()
+            time.sleep(0.05) # 50ms wait
+
+            # Send Payload in chunks
+            chunk_size = 512
+            for i in range(0, len(payload), chunk_size):
+                chunk = payload[i:i + chunk_size]
+                ser.write(chunk)
+                ser.flush()
+                time.sleep(0.002) # 2ms sleep between chunks
+
+            with state.lock:
+                state.status_msg = "Programmed successfully"
+        except Exception as e:
+            with state.lock:
+                state.status_msg = f"Prog Error: {e}"
+
+    def render_tui():
+        table = build_match_table(state, patterns)
+        stats = build_stats_panel(state)
+
+        input_panel = Panel(
+            f"[bold yellow]Enter string:[/bold yellow] [cyan]{input_buffer}[/cyan][blink]█[/blink]\n"
+            f"[dim]Enter:send, Esc/F10:quit, Ctrl-P:Program, Ctrl-R:query, Ctrl-U:clear[/dim]",
+            title="[bold]Interaction[/bold]",
+            border_style="yellow",
+        )
+
+        return Group(table, stats, input_panel)
+
+    console.print(BANNER, style="bold cyan")
+    console.print(f"[green]Connected to [bold]{port}[/bold] @ {baud} baud[/green]\n")
+
+    # Use non-canonical mode for Unix
+    old_settings = None
+    if os.name != 'nt':
+        old_settings = termios.tcgetattr(sys.stdin)
+        tty.setcbreak(sys.stdin.fileno())
+
+    try:
+        with Live(render_tui(), console=console, refresh_per_second=10) as live:
+            while True:
+                live.update(render_tui())
+                char = get_char()
+                if char is None:
+                    time.sleep(0.01)
+                    continue
+
+                # 1. Quit Commands
+                if char in (b"\x1b", b"\x11", b"\x18", b"\x00D"): # Esc, Ctrl-Q, Ctrl-X, F10
+                    break
+                elif char == b"\x03": # Ctrl-C
+                    raise KeyboardInterrupt
+
+                # 2. Programming Command (Ctrl-P)
+                elif char == b"\x10": # Ctrl-P
+                    program_fpga()
+                    continue
+
+                # 3. Query Commands
+                elif char in (b"\x12", b"\x00;"): # Ctrl-R, F1
+                    try:
+                        ser.write(b"?")
+                        ser.flush()
+                        with state.lock:
+                            state.status_msg = "Sent Query (?)"
+                    except serial.SerialException as exc:
+                        with state.lock:
+                            state.status_msg = f"Write error: {exc}"
+                    continue
+
+                # 4. Input Commands
+                elif char == b"\r" or char == b"\n": # Enter
+                    if not input_buffer:
+                        continue
+
+                    if input_buffer == "?":
+                        try:
+                            ser.write(b"?")
+                            ser.flush()
+                            with state.lock:
+                                state.status_msg = "Sent Query (?)"
+                        except serial.SerialException as exc:
+                            with state.lock:
+                                state.status_msg = f"Write error: {exc}"
+                        input_buffer = ""
+                        continue
+
+                    payload = input_buffer + "\n"
+                    try:
+                        with pending_lock:
+                            pending.append(input_buffer)
+                        ser.write(payload.encode("ascii"))
+                        ser.flush()
+                    except serial.SerialException as exc:
+                        with state.lock:
+                            state.status_msg = f"Write error: {exc}"
+
+                    input_buffer = ""
+
+                elif char in (b"\x08", b"\x7f"): # Backspace
+                    input_buffer = input_buffer[:-1]
+                elif char in (b"\x0c", b"\x15"): # Ctrl-L, Ctrl-U
+                    input_buffer = ""
+
+                # 5. Printable Input
+                elif len(char) == 1:
+                    try:
+                        decoded = char.decode("ascii")
+                        if decoded.isprintable():
+                            input_buffer += decoded
+                    except UnicodeDecodeError:
+                        pass
+
+                time.sleep(0.01)
+    finally:
+        if old_settings:
+            termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
+
+    ser.close()
+    console.print("\n[bold cyan]Bye![/bold cyan]")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Interactive TUI for XIIRegexBuilder")
+    parser.add_argument(
+        "--port", default=None, help="Serial port (default: auto-detect)"
+    )
+    parser.add_argument(
+        "--baud", type=int, default=115200, help="Baud rate (default: 115200)"
+    )
+    parser.add_argument(
+        "--regexes",
+        default="inputs/regexes.txt",
+        help="Path to regexes.txt for pattern labels",
+    )
+    args = parser.parse_args()
+
+    patterns = load_regexes(args.regexes)
+
+    port = args.port
+    if port is None:
+        port = auto_detect_port()
+        if port is None:
+            print("ERROR: No serial port found. Pass --port explicitly.")
+            sys.exit(1)
+        print(f"Auto-detected port: {port}")
+
+    run_tui(port, args.baud, patterns)
+
+
+if __name__ == "__main__":
+    main()
+</file>
+
+<file path="dump.vcd">
+$date
+   Tue Mar 31 10:02:33 2026
+$end
+
+$version
+  2025.2
+  $dumpfile ("dump.vcd") 
+$end
+
+$timescale
+  1ps
+$end
+
+$scope module tb_top $end
+$var reg 1 ! clk $end
+$var reg 1 " en $end
+$var reg 1 # rst $end
+$var reg 1 $ start $end
+$var reg 1 % end_of_str $end
+$var reg 8 & char_in [7:0] $end
+$var wire 6 ' match_bus [5:0] $end
+$scope module uut $end
+$var wire 1 ( clk $end
+$var wire 1 ) en $end
+$var wire 1 * rst $end
+$var wire 1 + start $end
+$var wire 1 , end_of_str $end
+$var wire 8 - char_in [7:0] $end
+$var wire 6 ' match_bus [5:0] $end
+$scope module inst_0 $end
+$var wire 1 ( clk $end
+$var wire 1 ) en $end
+$var wire 1 * rst $end
+$var wire 1 + start $end
+$var wire 1 , end_of_str $end
+$var wire 8 - char_in [7:0] $end
+$var reg 1 . match $end
+$var reg 3 / state_reg [2:0] $end
+$var wire 3 0 next_state [2:0] $end
+$upscope $end
+$scope module inst_1 $end
+$var wire 1 ( clk $end
+$var wire 1 ) en $end
+$var wire 1 * rst $end
+$var wire 1 + start $end
+$var wire 1 , end_of_str $end
+$var wire 8 - char_in [7:0] $end
+$var reg 1 1 match $end
+$var reg 4 2 state_reg [3:0] $end
+$var wire 4 3 next_state [3:0] $end
+$upscope $end
+$scope module inst_2 $end
+$var wire 1 ( clk $end
+$var wire 1 ) en $end
+$var wire 1 * rst $end
+$var wire 1 + start $end
+$var wire 1 , end_of_str $end
+$var wire 8 - char_in [7:0] $end
+$var reg 1 4 match $end
+$var reg 4 5 state_reg [3:0] $end
+$var wire 4 6 next_state [3:0] $end
+$upscope $end
+$scope module inst_3 $end
+$var wire 1 ( clk $end
+$var wire 1 ) en $end
+$var wire 1 * rst $end
+$var wire 1 + start $end
+$var wire 1 , end_of_str $end
+$var wire 8 - char_in [7:0] $end
+$var reg 1 7 match $end
+$var reg 4 8 state_reg [3:0] $end
+$var wire 4 9 next_state [3:0] $end
+$upscope $end
+$scope module inst_4 $end
+$var wire 1 ( clk $end
+$var wire 1 ) en $end
+$var wire 1 * rst $end
+$var wire 1 + start $end
+$var wire 1 , end_of_str $end
+$var wire 8 - char_in [7:0] $end
+$var reg 1 : match $end
+$var reg 4 ; state_reg [3:0] $end
+$var wire 4 < next_state [3:0] $end
+$upscope $end
+$scope module inst_5 $end
+$var wire 1 ( clk $end
+$var wire 1 ) en $end
+$var wire 1 * rst $end
+$var wire 1 + start $end
+$var wire 1 , end_of_str $end
+$var wire 8 - char_in [7:0] $end
+$var reg 1 = match $end
+$var reg 6 > state_reg [5:0] $end
+$var wire 6 ? next_state [5:0] $end
+$upscope $end
+$upscope $end
+$upscope $end
+$enddefinitions $end
+
+#0
+$dumpvars
+0!
+1"
+1#
+0$
+0%
+b0 &
+bx '
+0(
+1)
+1*
+0+
+0,
+b0 -
+x.
+bx /
+b0 0
+x1
+bx 2
+b0 3
+x4
+bx 5
+b0 6
+x7
+bx 8
+b0 9
+x:
+bx ;
+b0 <
+x=
+bx >
+b0 ?
+$end
+
+#5000
+1!
+b0 '
+1(
+0.
+b1 /
+01
+b1 2
+04
+b1 5
+07
+b1 8
+0:
+b1 ;
+0=
+b1 >
+
+#10000
+0!
+0(
+
+#15000
+1!
+1(
+
+#20000
+0!
+0#
+0(
+0*
+
+#25000
+1!
+1(
+b0 /
+b0 2
+b0 5
+b0 8
+b0 ;
+b0 >
+
+#30000
+0!
+1$
+0(
+1+
+
+#35000
+1!
+1(
+b1 /
+b1 2
+b1 5
+b1 8
+b1 ;
+b1 >
+
+#40000
+0!
+0$
+b1100001 &
+0(
+0+
+b1100001 -
+b10 0
+b10 3
+b10 6
+b10 9
+b10 <
+b10 ?
+
+#45000
+1!
+1(
+b10 /
+b0 0
+b10 2
+b0 3
+b10 5
+b10 8
+b100 9
+b10 ;
+b0 <
+b10 >
+
+#50000
+0!
+1%
+0(
+1,
+
+#55000
+1!
+b101 '
+1(
+1.
+b0 /
+b0 2
+14
+b100 8
+b0 9
+b0 ;
+
+#60000
+0!
+0%
+0(
+0,
+
+#65000
+1!
+b0 '
+1(
+0.
+04
+b0 8
+
+#70000
+0!
+1$
+0(
+1+
+
+#75000
+1!
+1(
+b1 /
+b10 0
+b1 2
+b10 3
+b1 5
+b1 8
+b10 9
+b1 ;
+b10 <
+b1 >
+
+#80000
+0!
+0$
+b1100010 &
+0(
+0+
+b1100010 -
+b100 0
+b0 3
+b100 6
+b0 9
+b0 <
+b100 ?
+
+#85000
+1!
+1(
+b100 /
+b0 0
+b0 2
+b100 5
+b0 8
+b0 ;
+b100 >
+
+#90000
+0!
+1%
+0(
+1,
+
+#95000
+1!
+b101 '
+1(
+1.
+b0 /
+14
+
+#100000
+0!
+0%
+0(
+0,
+
+#105000
+1!
+b0 '
+1(
+0.
+04
+
+#110000
+0!
+1$
+0(
+1+
+
+#115000
+1!
+1(
+b1 /
+b100 0
+b1 2
+b1 5
+b1 8
+b1 ;
+b1 >
+
+#120000
+0!
+0$
+b1100011 &
+0(
+0+
+b1100011 -
+b0 0
+b0 6
+b1000 ?
+
+#125000
+1!
+1(
+b0 /
+b0 2
+b0 5
+b0 8
+b0 ;
+b1000 >
+b0 ?
+
+#130000
+0!
+1%
+0(
+1,
+
+#135000
+1!
+1(
+b0 >
+
+#140000
+0!
+0%
+0(
+0,
+
+#145000
+1!
+1(
+
+#150000
+0!
+1$
+0(
+1+
+
+#155000
+1!
+1(
+b1 /
+b1 2
+b1 5
+b1 8
+b1 ;
+b1 >
+b1000 ?
+
+#160000
+0!
+0$
+b1100001 &
+0(
+0+
+b1100001 -
+b10 0
+b10 3
+b10 6
+b10 9
+b10 <
+b10 ?
+
+#165000
+1!
+1(
+b10 /
+b0 0
+b10 2
+b0 3
+b10 5
+b10 8
+b100 9
+b10 ;
+b0 <
+b10 >
+
+#170000
+0!
+0(
+
+#175000
+1!
+1(
+b0 /
+b0 2
+b100 8
+b0 9
+b0 ;
+
+#180000
+0!
+1%
+0(
+1,
+
+#185000
+1!
+b100 '
+1(
+14
+b0 8
+
+#190000
+0!
+0%
+0(
+0,
+
+#195000
+1!
+b0 '
+1(
+04
+
+#200000
+0!
+1$
+0(
+1+
+
+#205000
+1!
+1(
+b1 /
+b10 0
+b1 2
+b10 3
+b1 5
+b1 8
+b10 9
+b1 ;
+b10 <
+b1 >
+
+#210000
+0!
+0$
+0(
+0+
+
+#215000
+1!
+1(
+b10 /
+b0 0
+b10 2
+b0 3
+b10 5
+b10 8
+b100 9
+b10 ;
+b0 <
+b10 >
+
+#220000
+0!
+b1100010 &
+0(
+b1100010 -
+b100 3
+b100 6
+b100 <
+b100 ?
+
+#225000
+1!
+1(
+b0 /
+b100 2
+b100 5
+b100 8
+b1000 9
+b100 ;
+b0 <
+b100 >
+
+#230000
+0!
+1%
+0(
+1,
+
+#235000
+1!
+b100 '
+1(
+14
+b1000 8
+b0 9
+b0 ;
+
+#240000
+0!
+0%
+0(
+0,
+
+#245000
+1!
+b0 '
+1(
+04
+b0 8
+
+#250000
+0!
+1$
+0(
+1+
+
+#255000
+1!
+1(
+b1 /
+b100 0
+b1 2
+b0 3
+b1 5
+b1 8
+b1 ;
+b1 >
+
+#260000
+0!
+0$
+b1100001 &
+0(
+0+
+b1100001 -
+b10 0
+b10 3
+b10 6
+b10 9
+b10 <
+b10 ?
+
+#265000
+1!
+1(
+b10 /
+b0 0
+b10 2
+b0 3
+b10 5
+b10 8
+b100 9
+b10 ;
+b0 <
+b10 >
+
+#270000
+0!
+b1100011 &
+0(
+b1100011 -
+b1000 3
+b1000 6
+b1000 ?
+
+#275000
+1!
+1(
+b0 /
+b1000 2
+b0 3
+b1000 5
+b0 6
+b100 8
+b0 9
+b0 ;
+b1000 >
+b0 ?
+
+#280000
+0!
+1%
+0(
+1,
+
+#285000
+1!
+b110 '
+1(
+11
+b0 2
+14
+b0 5
+b0 8
+b0 >
+
+#290000
+0!
+0%
+0(
+0,
+
+#295000
+1!
+b0 '
+1(
+01
+04
+
+#300000
+0!
+1$
+0(
+1+
+
+#305000
+1!
+1(
+b1 /
+b1 2
+b1 5
+b1 8
+b1 ;
+b1 >
+b1000 ?
+
+#310000
+0!
+0$
+b1100001 &
+0(
+0+
+b1100001 -
+b10 0
+b10 3
+b10 6
+b10 9
+b10 <
+b10 ?
+
+#315000
+1!
+1(
+b10 /
+b0 0
+b10 2
+b0 3
+b10 5
+b10 8
+b100 9
+b10 ;
+b0 <
+b10 >
+
+#320000
+0!
+b1100010 &
+0(
+b1100010 -
+b100 3
+b100 6
+b100 <
+b100 ?
+
+#325000
+1!
+1(
+b0 /
+b100 2
+b100 5
+b100 8
+b1000 9
+b100 ;
+b0 <
+b100 >
+
+#330000
+0!
+b1100011 &
+0(
+b1100011 -
+b1000 3
+b1000 6
+b0 9
+b1000 <
+b1000 ?
+
+#335000
+1!
+1(
+b1000 2
+b0 3
+b1000 5
+b0 6
+b0 8
+b1000 ;
+b0 <
+b1000 >
+b0 ?
+
+#340000
+0!
+1%
+0(
+1,
+
+#345000
+1!
+b10110 '
+1(
+11
+b0 2
+14
+b0 5
+1:
+b0 ;
+b0 >
+
+#350000
+0!
+0%
+0(
+0,
+
+#355000
+1!
+b0 '
+1(
+01
+04
+0:
+
+#360000
+0!
+1$
+0(
+1+
+
+#365000
+1!
+1(
+b1 /
+b1 2
+b1 5
+b1 8
+b1 ;
+b1 >
+b1000 ?
+
+#370000
+0!
+0$
+b1100001 &
+0(
+0+
+b1100001 -
+b10 0
+b10 3
+b10 6
+b10 9
+b10 <
+b10 ?
+
+#375000
+1!
+1(
+b10 /
+b0 0
+b10 2
+b0 3
+b10 5
+b10 8
+b100 9
+b10 ;
+b0 <
+b10 >
+
+#380000
+0!
+b1100010 &
+0(
+b1100010 -
+b100 3
+b100 6
+b100 <
+b100 ?
+
+#385000
+1!
+1(
+b0 /
+b100 2
+b100 5
+b100 8
+b1000 9
+b100 ;
+b0 <
+b100 >
+
+#390000
+0!
+0(
+
+#395000
+1!
+1(
+b1000 8
+b0 9
+b0 ;
+
+#400000
+0!
+b1100011 &
+0(
+b1100011 -
+b1000 3
+b1000 6
+b1000 ?
+
+#405000
+1!
+1(
+b1000 2
+b0 3
+b1000 5
+b0 6
+b0 8
+b1000 >
+b0 ?
+
+#410000
+0!
+1%
+0(
+1,
+
+#415000
+1!
+b110 '
+1(
+11
+b0 2
+14
+b0 5
+b0 >
+
+#420000
+0!
+0%
+0(
+0,
+
+#425000
+1!
+b0 '
+1(
+01
+04
+
+#430000
+0!
+1$
+0(
+1+
+
+#435000
+1!
+1(
+b1 /
+b1 2
+b1 5
+b1 8
+b1 ;
+b1 >
+b1000 ?
+
+#440000
+0!
+0$
+b1100001 &
+0(
+0+
+b1100001 -
+b10 0
+b10 3
+b10 6
+b10 9
+b10 <
+b10 ?
+
+#445000
+1!
+1(
+b10 /
+b0 0
+b10 2
+b0 3
+b10 5
+b10 8
+b100 9
+b10 ;
+b0 <
+b10 >
+
+#450000
+0!
+b1100010 &
+0(
+b1100010 -
+b100 3
+b100 6
+b100 <
+b100 ?
+
+#455000
+1!
+1(
+b0 /
+b100 2
+b100 5
+b100 8
+b1000 9
+b100 ;
+b0 <
+b100 >
+
+#460000
+0!
+0(
+
+#465000
+1!
+1(
+b1000 8
+b0 9
+b0 ;
+
+#470000
+0!
+0(
+
+#475000
+1!
+1(
+b0 8
+
+#480000
+0!
+b1100011 &
+0(
+b1100011 -
+b1000 3
+b1000 6
+b1000 ?
+
+#485000
+1!
+1(
+b1000 2
+b0 3
+b1000 5
+b0 6
+b1000 >
+b0 ?
+
+#490000
+0!
+1%
+0(
+1,
+
+#495000
+1!
+b110 '
+1(
+11
+b0 2
+14
+b0 5
+b0 >
+
+#500000
+0!
+0%
+0(
+0,
+
+#505000
+1!
+b0 '
+1(
+01
+04
+
+#510000
+0!
+1$
+0(
+1+
+
+#515000
+1!
+1(
+b1 /
+b1 2
+b1 5
+b1 8
+b1 ;
+b1 >
+b1000 ?
+
+#520000
+0!
+0$
+b1100001 &
+0(
+0+
+b1100001 -
+b10 0
+b10 3
+b10 6
+b10 9
+b10 <
+b10 ?
+
+#525000
+1!
+1(
+b10 /
+b0 0
+b10 2
+b0 3
+b10 5
+b10 8
+b100 9
+b10 ;
+b0 <
+b10 >
+
+#530000
+0!
+0(
+
+#535000
+1!
+1(
+b0 /
+b0 2
+b100 8
+b0 9
+b0 ;
+
+#540000
+0!
+0(
+
+#545000
+1!
+1(
+b0 8
+
+#550000
+0!
+0(
+
+#555000
+1!
+1(
+
+#560000
+0!
+1%
+0(
+1,
+
+#565000
+1!
+b100 '
+1(
+14
+
+#570000
+0!
+0%
+0(
+0,
+
+#575000
+1!
+b0 '
+1(
+04
+
+#580000
+0!
+1$
+0(
+1+
+
+#585000
+1!
+1(
+b1 /
+b10 0
+b1 2
+b10 3
+b1 5
+b1 8
+b10 9
+b1 ;
+b10 <
+b1 >
+
+#590000
+0!
+0$
+b1100010 &
+0(
+0+
+b1100010 -
+b100 0
+b0 3
+b100 6
+b0 9
+b0 <
+b100 ?
+
+#595000
+1!
+1(
+b100 /
+b0 0
+b0 2
+b100 5
+b0 8
+b0 ;
+b100 >
+
+#600000
+0!
+0(
+
+#605000
+1!
+1(
+b0 /
+
+#610000
+0!
+0(
+
+#615000
+1!
+1(
+
+#620000
+0!
+0(
+
+#625000
+1!
+1(
+
+#630000
+0!
+1%
+0(
+1,
+
+#635000
+1!
+b100 '
+1(
+14
+
+#640000
+0!
+0%
+0(
+0,
+
+#645000
+1!
+b0 '
+1(
+04
+
+#650000
+0!
+1$
+0(
+1+
+
+#655000
+1!
+1(
+b1 /
+b100 0
+b1 2
+b1 5
+b1 8
+b1 ;
+b1 >
+
+#660000
+0!
+0$
+b1111000 &
+0(
+0+
+b1111000 -
+b0 0
+b0 6
+b0 ?
+
+#665000
+1!
+1(
+b0 /
+b0 2
+b0 5
+b0 8
+b0 ;
+b0 >
+
+#670000
+0!
+1%
+0(
+1,
+
+#675000
+1!
+1(
+
+#680000
+0!
+0%
+0(
+0,
+
+#685000
+1!
+1(
+
+#690000
+0!
+1$
+0(
+1+
+
+#695000
+1!
+1(
+b1 /
+b1 2
+b1 5
+b1 8
+b1 ;
+b1 >
+
+#700000
+0!
+0$
+b1100001 &
+0(
+0+
+b1100001 -
+b10 0
+b10 3
+b10 6
+b10 9
+b10 <
+b10 ?
+
+#705000
+1!
+1(
+b10 /
+b0 0
+b10 2
+b0 3
+b10 5
+b10 8
+b100 9
+b10 ;
+b0 <
+b10 >
+
+#710000
+0!
+b1111000 &
+0(
+b1111000 -
+b0 6
+b0 ?
+
+#715000
+1!
+1(
+b0 /
+b0 2
+b0 5
+b100 8
+b0 9
+b0 ;
+b0 >
+
+#720000
+0!
+b1100010 &
+0(
+b1100010 -
+b1000 9
+
+#725000
+1!
+1(
+b1000 8
+b0 9
+
+#730000
+0!
+1%
+0(
+1,
+
+#735000
+1!
+b1000 '
+1(
+17
+b0 8
+
+#740000
+0!
+0%
+0(
+0,
+
+#745000
+1!
+b0 '
+1(
+07
+
+#750000
+0!
+1$
+0(
+1+
+
+#755000
+1!
+1(
+b1 /
+b100 0
+b1 2
+b1 5
+b100 6
+b1 8
+b1 ;
+b1 >
+b100 ?
+
+#760000
+0!
+0$
+b1100001 &
+0(
+0+
+b1100001 -
+b10 0
+b10 3
+b10 6
+b10 9
+b10 <
+b10 ?
+
+#765000
+1!
+1(
+b10 /
+b0 0
+b10 2
+b0 3
+b10 5
+b10 8
+b100 9
+b10 ;
+b0 <
+b10 >
+
+#770000
+0!
+b1111001 &
+0(
+b1111001 -
+b0 6
+b0 ?
+
+#775000
+1!
+1(
+b0 /
+b0 2
+b0 5
+b100 8
+b0 9
+b0 ;
+b0 >
+
+#780000
+0!
+b1100010 &
+0(
+b1100010 -
+b1000 9
+
+#785000
+1!
+1(
+b1000 8
+b0 9
+
+#790000
+0!
+1%
+0(
+1,
+
+#795000
+1!
+b1000 '
+1(
+17
+b0 8
+
+#800000
+0!
+0%
+0(
+0,
+
+#805000
+1!
+b0 '
+1(
+07
+
+#810000
+0!
+1$
+0(
+1+
+
+#815000
+1!
+1(
+b1 /
+b100 0
+b1 2
+b1 5
+b100 6
+b1 8
+b1 ;
+b1 >
+b100 ?
+
+#820000
+0!
+0$
+b101000 &
+0(
+0+
+b101000 -
+b0 0
+b0 6
+b0 ?
+
+#825000
+1!
+1(
+b0 /
+b0 2
+b0 5
+b0 8
+b0 ;
+b0 >
+
+#830000
+0!
+b1100001 &
+0(
+b1100001 -
+
+#835000
+1!
+1(
+
+#840000
+0!
+b1111100 &
+0(
+b1111100 -
+
+#845000
+1!
+1(
+
+#850000
+0!
+b1100010 &
+0(
+b1100010 -
+
+#855000
+1!
+1(
+
+#860000
+0!
+b101001 &
+0(
+b101001 -
+
+#865000
+1!
+1(
+
+#870000
+0!
+1%
+0(
+1,
+
+#875000
+1!
+1(
+
+#880000
+0!
+0%
+0(
+0,
+
+#885000
+1!
+1(
+
+#890000
+0!
+1$
+0(
+1+
+
+#895000
+1!
+1(
+b1 /
+b1 2
+b1 5
+b1 8
+b1 ;
+b1 >
+
+#900000
+0!
+0$
+b1100001 &
+0(
+0+
+b1100001 -
+b10 0
+b10 3
+b10 6
+b10 9
+b10 <
+b10 ?
+
+#905000
+1!
+1(
+b10 /
+b0 0
+b10 2
+b0 3
+b10 5
+b10 8
+b100 9
+b10 ;
+b0 <
+b10 >
+
+#910000
+0!
+b1100010 &
+0(
+b1100010 -
+b100 3
+b100 6
+b100 <
+b100 ?
+
+#915000
+1!
+1(
+b0 /
+b100 2
+b100 5
+b100 8
+b1000 9
+b100 ;
+b0 <
+b100 >
+
+#920000
+0!
+b1100011 &
+0(
+b1100011 -
+b1000 3
+b1000 6
+b0 9
+b1000 <
+b1000 ?
+
+#925000
+1!
+1(
+b1000 2
+b0 3
+b1000 5
+b0 6
+b0 8
+b1000 ;
+b0 <
+b1000 >
+b0 ?
+
+#930000
+0!
+1%
+0(
+1,
+
+#935000
+1!
+b10110 '
+1(
+11
+b0 2
+14
+b0 5
+1:
+b0 ;
+b0 >
+
+#940000
+0!
+0%
+0(
+0,
+
+#945000
+1!
+b0 '
+1(
+01
+04
+0:
+
+#950000
+0!
+1$
+0(
+1+
+
+#955000
+1!
+1(
+b1 /
+b1 2
+b1 5
+b1 8
+b1 ;
+b1 >
+b1000 ?
+
+#960000
+0!
+0$
+b1100001 &
+0(
+0+
+b1100001 -
+b10 0
+b10 3
+b10 6
+b10 9
+b10 <
+b10 ?
+
+#965000
+1!
+1(
+b10 /
+b0 0
+b10 2
+b0 3
+b10 5
+b10 8
+b100 9
+b10 ;
+b0 <
+b10 >
+
+#970000
+0!
+b1100010 &
+0(
+b1100010 -
+b100 3
+b100 6
+b100 <
+b100 ?
+
+#975000
+1!
+1(
+b0 /
+b100 2
+b100 5
+b100 8
+b1000 9
+b100 ;
+b0 <
+b100 >
+
+#980000
+0!
+b1100011 &
+0(
+b1100011 -
+b1000 3
+b1000 6
+b0 9
+b1000 <
+b1000 ?
+
+#985000
+1!
+1(
+b1000 2
+b0 3
+b1000 5
+b0 6
+b0 8
+b1000 ;
+b0 <
+b1000 >
+b0 ?
+
+#990000
+0!
+b1100100 &
+0(
+b1100100 -
+b10000 ?
+
+#995000
+1!
+1(
+b0 2
+b0 5
+b0 ;
+b10000 >
+
+#1000000
+0!
+1%
+0(
+1,
+
+#1005000
+1!
+b100000 '
+1(
+1=
+
+#1010000
+0!
+0%
+0(
+0,
+
+#1015000
+1!
+b0 '
+1(
+0=
+
+#1020000
+0!
+1$
+0(
+1+
+
+#1025000
+1!
+1(
+b1 /
+b1 2
+b1 5
+b1 8
+b1 ;
+b1 >
+b0 ?
+
+#1030000
+0!
+0$
+b1100001 &
+0(
+0+
+b1100001 -
+b10 0
+b10 3
+b10 6
+b10 9
+b10 <
+b10 ?
+
+#1035000
+1!
+1(
+b10 /
+b0 0
+b10 2
+b0 3
+b10 5
+b10 8
+b100 9
+b10 ;
+b0 <
+b10 >
+
+#1040000
+0!
+b1100010 &
+0(
+b1100010 -
+b100 3
+b100 6
+b100 <
+b100 ?
+
+#1045000
+1!
+1(
+b0 /
+b100 2
+b100 5
+b100 8
+b1000 9
+b100 ;
+b0 <
+b100 >
+
+#1050000
+0!
+b1100011 &
+0(
+b1100011 -
+b1000 3
+b1000 6
+b0 9
+b1000 <
+b1000 ?
+
+#1055000
+1!
+1(
+b1000 2
+b0 3
+b1000 5
+b0 6
+b0 8
+b1000 ;
+b0 <
+b1000 >
+b0 ?
+
+#1060000
+0!
+b1100101 &
+0(
+b1100101 -
+b100000 ?
+
+#1065000
+1!
+1(
+b0 2
+b0 5
+b0 ;
+b100000 >
+
+#1070000
+0!
+1%
+0(
+1,
+
+#1075000
+1!
+b100000 '
+1(
+1=
+
+#1080000
+0!
+0%
+0(
+0,
+
+#1085000
+1!
+b0 '
+1(
+0=
+
+#1090000
+0!
+0(
+
+#1095000
+1!
+1(
+
+#1100000
+0!
+0(
+
+#1105000
+1!
+1(
+
+#1110000
+0!
+0(
+
+#1115000
+1!
+1(
+
+#1120000
+0!
+0(
+
+#1125000
+1!
+1(
+
+#1130000
+0!
+0(
+
+#1135000
+1!
+1(
+
+#1140000
+0!
+0(
+
+#1145000
+1!
+1(
+
+#1150000
+0!
+0(
+
+#1155000
+1!
+1(
+
+#1160000
+0!
+0(
+
+#1165000
+1!
+1(
+
+#1170000
+0!
+0(
+
+#1175000
+1!
+1(
+
+#1180000
+0!
+0(
+
+#1185000
+1!
+1(
+</file>
+
+</files>
