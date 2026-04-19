@@ -26,6 +26,7 @@ Controls
 ────────
   Enter         — send current input to FPGA
   Ctrl-C / q    — quit
+  Ctrl-P        — Program FPGA with output/regex.bin
   Ctrl-L        — clear input line
   ?             — query current counters without sending a string
 """
@@ -35,7 +36,7 @@ import sys
 import threading
 import time
 import re as _re
-import msvcrt
+import os
 
 try:
     import serial
@@ -55,6 +56,25 @@ try:
 except ImportError:
     print("ERROR: rich not found. Run 'pip install rich'")
     sys.exit(1)
+
+# OS-specific keyboard handling
+if os.name == 'nt':
+    import msvcrt
+    def get_char():
+        if msvcrt.kbhit():
+            ch = msvcrt.getch()
+            if ch in (b'\x00', b'\xe0'):
+                ch += msvcrt.getch()
+            return ch
+        return None
+else:
+    import termios
+    import tty
+    import select
+    def get_char():
+        if select.select([sys.stdin], [], [], 0)[0]:
+            return sys.stdin.read(1).encode('ascii')
+        return None
 
 # ─────────────────────────────────────────────────────────────────────────────
 BANNER = r"""
@@ -92,7 +112,6 @@ def auto_detect_port() -> str | None:
         desc = p.description.lower()
         if "usb" in desc or "uart" in desc or "serial" in desc or "ftdi" in desc:
             return p.device
-    # Fallback: first available port
     ports = list(serial.tools.list_ports.comports())
     return ports[0].device if ports else None
 
@@ -103,10 +122,10 @@ class MatchState:
 
     def __init__(self, num_regex: int):
         self.lock = threading.Lock()
-        self.num_regex = num_regex
-        self.match_bits: list[int] = [0] * num_regex
+        self.num_regex = 1 # Force 1 regex for dynamic mode
+        self.match_bits: list[int] = [0] * self.num_regex
         self.byte_count: int = 0
-        self.hit_counts: list[int] = [0] * num_regex
+        self.hit_counts: list[int] = [0] * self.num_regex
         self.last_string: str = ""
         self.last_response_raw: str = ""
         self.status_msg: str = "Waiting for first result…"
@@ -119,8 +138,7 @@ class MatchState:
         bits_str, bytes_hex, hits_str = m.group(1), m.group(2), m.group(3)
 
         bits_str = bits_str.zfill(self.num_regex)
-        match_bits = [int(b) for b in bits_str]  # index 0 = MSB
-        # Reverse so index 0 = regex 0 (LSB of the hardware bitmask)
+        match_bits = [int(b) for b in bits_str]
         match_bits_ordered = list(reversed(match_bits))
 
         hit_list = [int(h, 16) for h in hits_str.split(",")]
@@ -145,17 +163,19 @@ def reader_thread(
     buf = ""
     while True:
         try:
-            chunk = ser.read(256).decode("ascii", errors="replace")
-            buf += chunk
-            while "\n" in buf:
-                line, buf = buf.split("\n", 1)
-                line = line.strip()
-                if not line:
-                    continue
-                # Retrieve the string we sent (if any)
-                with pending_lock:
-                    sent = pending.pop(0) if pending else ""
-                state.update_from_response(line, sent)
+            if ser.in_waiting:
+                chunk = ser.read(ser.in_waiting).decode("ascii", errors="replace")
+                buf += chunk
+                while "\n" in buf:
+                    line, buf = buf.split("\n", 1)
+                    line = line.strip()
+                    if not line:
+                        continue
+                    with pending_lock:
+                        sent = pending.pop(0) if pending else ""
+                    state.update_from_response(line, sent)
+            else:
+                time.sleep(0.01)
         except serial.SerialException:
             with state.lock:
                 state.status_msg = "Serial error — disconnected"
@@ -167,9 +187,9 @@ def reader_thread(
 
 # ─────────────────────────────────────────────────────────────────────────────
 def build_match_table(state: MatchState, patterns: list[str]) -> Table:
-    """Build the live Rich table showing match results."""
+    """Build the live Rich table showing match results (1 Regex row)."""
     table = Table(
-        title="[bold cyan]Regex Match Results[/bold cyan]",
+        title="[bold cyan]Regex Match Result[/bold cyan]",
         box=box.ROUNDED,
         expand=True,
         show_lines=True,
@@ -178,43 +198,25 @@ def build_match_table(state: MatchState, patterns: list[str]) -> Table:
     with state.lock:
         bits = state.match_bits[:]
         hits = state.hit_counts[:]
-        n = state.num_regex
+        n = 1 # Only 1 regex
 
-    num_cols = 2 if n > 8 else 1
-    rows_per_col = (n + num_cols - 1) // num_cols
+    table.add_column("#", style="dim", width=4, justify="right")
+    table.add_column("Pattern", style="white", min_width=20)
+    table.add_column("MATCH", justify="center", width=8)
+    table.add_column("Hits", justify="right", width=8)
 
-    for _ in range(num_cols):
-        table.add_column("#", style="dim", width=4, justify="right")
-        table.add_column("Pattern", style="white", min_width=20)
-        table.add_column("MATCH", justify="center", width=8)
-        table.add_column("Hits", justify="right", width=8)
+    label = patterns[0] if len(patterns) > 0 else "Dynamic Regex"
+    if len(label) > 50:
+        label = label[:47] + "..."
+    matched = bool(bits[0]) if len(bits) > 0 else False
+    hit_cnt = hits[0] if len(hits) > 0 else 0
 
-    for row_idx in range(rows_per_col):
-        row_data = []
-        for col_idx in range(num_cols):
-            i = col_idx * rows_per_col + row_idx
-            if i < n:
-                label = patterns[i] if i < len(patterns) else f"Regex {i}"
-                if len(label) > 30:
-                    label = label[:27] + "..."
-                matched = bool(bits[i]) if i < len(bits) else False
-                hit_cnt = hits[i] if i < len(hits) else 0
+    if matched:
+        match_cell = Text("● MATCH", style="bold green")
+    else:
+        match_cell = Text("○ —", style="dim red")
 
-                if matched:
-                    match_cell = Text("● MATCH", style="bold green")
-                else:
-                    match_cell = Text("○ —", style="dim red")
-
-                row_data.extend([
-                    str(i),
-                    f"[italic]{label}[/italic]",
-                    match_cell,
-                    f"[yellow]{hit_cnt}[/yellow]"
-                ])
-            else:
-                row_data.extend(["", "", "", ""])
-
-        table.add_row(*row_data)
+    table.add_row("0", f"[italic]{label}[/italic]", match_cell, f"[yellow]{hit_cnt}[/yellow]")
 
     return table
 
@@ -246,10 +248,9 @@ def build_stats_panel(state: MatchState) -> Panel:
 # ─────────────────────────────────────────────────────────────────────────────
 def run_tui(port: str, baud: int, patterns: list[str]) -> None:
     console = Console()
-    num_regex = max(len(patterns), 1)
+    num_regex = 1
     state = MatchState(num_regex)
 
-    # Open serial port
     try:
         ser = serial.Serial(port, baud, timeout=0.05)
         state.connected = True
@@ -267,14 +268,50 @@ def run_tui(port: str, baud: int, patterns: list[str]) -> None:
 
     input_buffer = ""
 
+    def program_fpga():
+        try:
+            with state.lock:
+                state.status_msg = "Programming..."
+            
+            if not os.path.exists("output/regex.bin"):
+                with state.lock:
+                    state.status_msg = "Error: output/regex.bin not found"
+                return
+
+            with open("output/regex.bin", "rb") as f:
+                payload = f.read()
+
+            if len(payload) != 4098:
+                with state.lock:
+                    state.status_msg = f"Error: regex.bin is {len(payload)} bytes (expected 4098)"
+                return
+
+            # Send Header
+            ser.write(b'\xFE\xFE')
+            ser.flush()
+            time.sleep(0.05) # 50ms wait
+
+            # Send Payload in chunks
+            chunk_size = 512
+            for i in range(0, len(payload), chunk_size):
+                chunk = payload[i:i + chunk_size]
+                ser.write(chunk)
+                ser.flush()
+                time.sleep(0.002) # 2ms sleep between chunks
+
+            with state.lock:
+                state.status_msg = "Programmed successfully"
+        except Exception as e:
+            with state.lock:
+                state.status_msg = f"Prog Error: {e}"
+
     def render_tui():
-        # Build layout elements
         table = build_match_table(state, patterns)
         stats = build_stats_panel(state)
 
         input_panel = Panel(
             f"[bold yellow]Enter string:[/bold yellow] [cyan]{input_buffer}[/cyan][blink]█[/blink]\n"
-            f"[dim]Enter:send, Esc/F10:quit, F1/Ctrl-R:query, Ctrl-U:clear[/dim]",
+            f"[dim]Enter:send, Esc/F10:quit, Ctrl-P:Program, Ctrl-R:query, Ctrl-U:clear[/dim]",
             title="[bold]Interaction[/bold]",
             border_style="yellow",
         )
@@ -284,32 +321,34 @@ def run_tui(port: str, baud: int, patterns: list[str]) -> None:
     console.print(BANNER, style="bold cyan")
     console.print(f"[green]Connected to [bold]{port}[/bold] @ {baud} baud[/green]\n")
 
-    # MAIN INTERACTIVE LOOP
-    with Live(render_tui(), console=console, refresh_per_second=10) as live:
-        while True:
-            live.update(render_tui())
+    # Use non-canonical mode for Unix
+    old_settings = None
+    if os.name != 'nt':
+        old_settings = termios.tcgetattr(sys.stdin)
+        tty.setcbreak(sys.stdin.fileno())
 
-            if msvcrt.kbhit():
-                char = msvcrt.getch()
-
-                # Handle extended keys (F-keys, arrows, etc)
-                if char in (b"\x00", b"\xe0"):
-                    char = char + msvcrt.getch()
+    try:
+        with Live(render_tui(), console=console, refresh_per_second=10) as live:
+            while True:
+                live.update(render_tui())
+                char = get_char()
+                if char is None:
+                    time.sleep(0.01)
+                    continue
 
                 # 1. Quit Commands
-                if char in (
-                    b"\x1b",
-                    b"\x11",
-                    b"\x18",
-                    b"\x00D",
-                ):  # Esc, Ctrl-Q, Ctrl-X, F10
+                if char in (b"\x1b", b"\x11", b"\x18", b"\x00D"): # Esc, Ctrl-Q, Ctrl-X, F10
                     break
-                elif char == b"\x03":  # Ctrl-C
+                elif char == b"\x03": # Ctrl-C
                     raise KeyboardInterrupt
 
-                # 2. Query Commands
-                elif char in (b"\x13", b"\x12", b"\x00;"):  # Ctrl-S, Ctrl-R, F1
-                    # Hotkey for counter query
+                # 2. Programming Command (Ctrl-P)
+                elif char == b"\x10": # Ctrl-P
+                    program_fpga()
+                    continue
+
+                # 3. Query Commands
+                elif char in (b"\x12", b"\x00;"): # Ctrl-R, F1
                     try:
                         ser.write(b"?")
                         ser.flush()
@@ -320,12 +359,11 @@ def run_tui(port: str, baud: int, patterns: list[str]) -> None:
                             state.status_msg = f"Write error: {exc}"
                     continue
 
-                # 3. Input Commands
-                elif char == b"\r":  # Enter
+                # 4. Input Commands
+                elif char == b"\r" or char == b"\n": # Enter
                     if not input_buffer:
                         continue
 
-                    # Handle explicit "?" in the input buffer
                     if input_buffer == "?":
                         try:
                             ser.write(b"?")
@@ -338,7 +376,6 @@ def run_tui(port: str, baud: int, patterns: list[str]) -> None:
                         input_buffer = ""
                         continue
 
-                    # Send normally to FPGA with newline
                     payload = input_buffer + "\n"
                     try:
                         with pending_lock:
@@ -351,12 +388,12 @@ def run_tui(port: str, baud: int, patterns: list[str]) -> None:
 
                     input_buffer = ""
 
-                elif char == b"\x08":  # Backspace
+                elif char in (b"\x08", b"\x7f"): # Backspace
                     input_buffer = input_buffer[:-1]
-                elif char in (b"\x0c", b"\x15"):  # Ctrl-L, Ctrl-U (Clear Buffer)
+                elif char in (b"\x0c", b"\x15"): # Ctrl-L, Ctrl-U
                     input_buffer = ""
 
-                # 4. Printable Input
+                # 5. Printable Input
                 elif len(char) == 1:
                     try:
                         decoded = char.decode("ascii")
@@ -365,7 +402,10 @@ def run_tui(port: str, baud: int, patterns: list[str]) -> None:
                     except UnicodeDecodeError:
                         pass
 
-            time.sleep(0.01)
+                time.sleep(0.01)
+    finally:
+        if old_settings:
+            termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
 
     ser.close()
     console.print("\n[bold cyan]Bye![/bold cyan]")

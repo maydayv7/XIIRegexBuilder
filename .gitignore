@@ -48,6 +48,7 @@ build/
 *.bit
 *.jou
 *.log
+*.pb
 clockInfo.txt
 dfx_runtime.txt
 .Xil/
