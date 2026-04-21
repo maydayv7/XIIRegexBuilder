@@ -1,7 +1,7 @@
 `timescale 1ns / 1ps
 
-// NFA for regex index 3
-module nfa_3 (
+// NFA for regex index 13
+module nfa_13 (
     input  wire       clk,
     input  wire       en,
     input  wire       rst,
@@ -17,9 +17,9 @@ module nfa_3 (
     wire [3:0] next_state;
 
     assign next_state[0] = 1'b0;
-    assign next_state[1] = (state_reg[0] && (char_in == 8'd98));
-    assign next_state[2] = (state_reg[1] && (char_in == 8'd101)) | (state_reg[2] && (char_in == 8'd101));
-    assign next_state[3] = (state_reg[2] && (char_in == 8'd112));
+    assign next_state[1] = (state_reg[0] && (char_in == 8'd120)) | (state_reg[3] && (char_in == 8'd120));
+    assign next_state[2] = (state_reg[1] && (char_in >= 8'd32) && (char_in <= 8'd126));
+    assign next_state[3] = (state_reg[2] && (char_in == 8'd121));
 
     always @(posedge clk) begin
         if (rst || start) begin
