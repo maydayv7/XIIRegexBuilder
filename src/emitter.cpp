@@ -10,12 +10,13 @@
 #include <filesystem>
 
 // =============================================================================
-// Emitter::emit — orchestration
+// Emitter::emit -  orchestration
 // =============================================================================
 void Emitter::emit(const std::vector<std::unique_ptr<NFA>> &nfas,
                    const std::string &outputDirStr,
                    const std::vector<std::string> &testStrings,
-                   const std::vector<std::string> &expectedMatches)
+                   const std::vector<std::string> &expectedMatches,
+                   bool isPII)
 {
     if (nfas.empty())
     {
@@ -35,22 +36,32 @@ void Emitter::emit(const std::vector<std::unique_ptr<NFA>> &nfas,
 
     for (const auto &nfa : nfas)
     {
-        emitNFAModule(*nfa, outputDir);
+        emitNFAModule(*nfa, outputDir, isPII);
     }
 
     emitTopModule(nfas, outputDir);
-    emitUARTRX(outputDir);        // uart_rx.v
-    emitUARTTX(outputDir);        // uart_tx.v
-    emitFIFO(outputDir);          // uart_rx_fifo.v
-    emitTopFPGA(nfas, outputDir); // top_fpga.v
+    if (isPII)
+    {
+        emitPIIUART(outputDir);
+        emitPIIUARTTx(outputDir);
+        emitPIITopFPGA(nfas, outputDir);
+    }
+    else
+    {
+        emitUARTRX(outputDir);
+        emitUARTTX(outputDir);
+        emitFIFO(outputDir);
+        emitTopFPGA(nfas, outputDir);
+    }
+
     emitConstraints(nfas, outputDir);
     emitTestbench(nfas, outputDir, testStrings, expectedMatches);
 }
 
 // =============================================================================
-// emitNFAModule — one file per regex
+// emitNFAModule -  one file per regex
 // =============================================================================
-void Emitter::emitNFAModule(const NFA &nfa, const std::filesystem::path &outputDir)
+void Emitter::emitNFAModule(const NFA &nfa, const std::filesystem::path &outputDir, bool isPII)
 {
     auto filePath = outputDir / ("nfa_" + std::to_string(nfa.regexIndex) + ".v");
     std::ofstream out;
@@ -96,7 +107,8 @@ void Emitter::emitNFAModule(const NFA &nfa, const std::filesystem::path &outputD
         << "    input  wire       start,\n"
         << "    input  wire       end_of_str,\n"
         << "    input  wire [7:0] char_in,\n"
-        << "    output reg        match\n"
+        << "    output " << (isPII ? "wire       " : "reg        ") << "match,\n"
+        << "    output wire       active\n"
         << ");\n\n";
 
     out << "    // One-hot state register\n"
@@ -120,6 +132,11 @@ void Emitter::emitNFAModule(const NFA &nfa, const std::filesystem::path &outputD
         out << "    assign next_state[" << localId << "] = ";
 
         std::vector<std::string> terms;
+
+        if (isPII && localId == 0)
+        {
+            terms.push_back("1'b1");
+        }
 
         if (auto it = invertedTransitions.find(globalId); it != invertedTransitions.end())
         {
@@ -182,14 +199,23 @@ void Emitter::emitNFAModule(const NFA &nfa, const std::filesystem::path &outputD
         << "        end else if (en) begin\n"
         << "            state_reg <= next_state;\n"
         << "        end\n"
-        << "    end\n\n"
-        << "    // Match logic: asserted on cycle following end_of_str\n"
-        << "    always @(posedge clk) begin\n"
-        << "        if (rst || start) begin\n"
-        << "            match <= 1'b0;\n"
-        << "        end else if (en) begin\n"
-        << "            if (end_of_str) begin\n"
-        << "                match <= ";
+        << "    end\n\n";
+
+    if (isPII)
+    {
+        out << "    // Match logic: asserted immediately on accept state (combinational)\n"
+            << "    assign match = ";
+    }
+    else
+    {
+        out << "    // Match logic: asserted on cycle following end_of_str\n"
+            << "    always @(posedge clk) begin\n"
+            << "        if (rst || start) begin\n"
+            << "            match <= 1'b0;\n"
+            << "        end else if (en) begin\n"
+            << "            if (end_of_str) begin\n"
+            << "                match <= ";
+    }
 
     std::vector<std::string> acceptTerms;
     for (const auto &[id, state] : nfa.states)
@@ -218,17 +244,33 @@ void Emitter::emitNFAModule(const NFA &nfa, const std::filesystem::path &outputD
         out << "})";
     }
 
-    out << ";\n"
-        << "            end else begin\n"
-        << "                match <= 1'b0;\n"
-        << "            end\n"
-        << "        end\n"
-        << "    end\n\n"
-        << "endmodule\n";
+    if (isPII)
+    {
+        out << ";\n\n";
+    }
+    else
+    {
+        out << ";\n"
+            << "            end else begin\n"
+            << "                match <= 1'b0;\n"
+            << "            end\n"
+            << "        end\n"
+            << "    end\n\n";
+    }
+    out << "    // Active logic: high if any state other than state 0 is active\n";
+    if (numStates > 1)
+    {
+        out << "    assign active = |state_reg[" << numStates - 1 << ":1];\n\n";
+    }
+    else
+    {
+        out << "    assign active = 1'b0;\n\n";
+    }
+    out << "endmodule\n";
 }
 
 // =============================================================================
-// emitTopModule — top.v wrapper
+// emitTopModule -  top.v wrapper
 // =============================================================================
 void Emitter::emitTopModule(const std::vector<std::unique_ptr<NFA>> &nfas, const std::filesystem::path &outputDir)
 {
@@ -253,20 +295,21 @@ void Emitter::emitTopModule(const std::vector<std::unique_ptr<NFA>> &nfas, const
         << "    input  wire       start,\n"
         << "    input  wire       end_of_str,\n"
         << "    input  wire [7:0] char_in,\n"
-        << "    output wire [" << (nfas.size() - 1) << ":0] match_bus\n"
+        << "    output wire [" << (nfas.size() > 0 ? nfas.size() - 1 : 0) << ":0] match_bus,\n"
+        << "    output wire [" << (nfas.size() > 0 ? nfas.size() - 1 : 0) << ":0] active_bus\n"
         << ");\n\n";
 
     for (size_t i = 0; i < nfas.size(); ++i)
     {
         out << "    nfa_" << nfas[i]->regexIndex << " inst_" << nfas[i]->regexIndex << " (\n"
-            << "        .clk(clk), .en(en), .rst(rst), .start(start), .end_of_str(end_of_str), .char_in(char_in), .match(match_bus[" << i << "])\n"
+            << "        .clk(clk), .en(en), .rst(rst), .start(start), .end_of_str(end_of_str), .char_in(char_in), .match(match_bus[" << i << "]), .active(active_bus[" << i << "])\n"
             << "    );\n\n";
     }
     out << "endmodule\n";
 }
 
 // =============================================================================
-// emitTestbench — tb_top.v
+// emitTestbench -  tb_top.v
 // =============================================================================
 void Emitter::emitTestbench(const std::vector<std::unique_ptr<NFA>> &nfas,
                             const std::filesystem::path &outputDir,
@@ -292,8 +335,9 @@ void Emitter::emitTestbench(const std::vector<std::unique_ptr<NFA>> &nfas,
         << "module tb_top;\n"
         << "    reg clk, en, rst, start, end_of_str;\n"
         << "    reg [7:0] char_in;\n"
-        << "    wire [" << (numNFAs > 0 ? numNFAs - 1 : 0) << ":0] match_bus;\n\n"
-        << "    top uut (.clk(clk), .en(en), .rst(rst), .start(start), .end_of_str(end_of_str), .char_in(char_in), .match_bus(match_bus));\n\n"
+        << "    wire [" << (numNFAs > 0 ? numNFAs - 1 : 0) << ":0] match_bus;\n"
+        << "    wire [" << (numNFAs > 0 ? numNFAs - 1 : 0) << ":0] active_bus;\n\n"
+        << "    top uut (.clk(clk), .en(en), .rst(rst), .start(start), .end_of_str(end_of_str), .char_in(char_in), .match_bus(match_bus), .active_bus(active_bus));\n\n"
         << "    always #5 clk = ~clk;\n\n"
         << "    initial begin\n"
         << "        // synthesis translate_off\n"
@@ -347,7 +391,7 @@ void Emitter::emitTestbench(const std::vector<std::unique_ptr<NFA>> &nfas,
 }
 
 // =============================================================================
-// emitUARTRX — uart_rx.v
+// emitUARTRX -  uart_rx.v
 // =============================================================================
 void Emitter::emitUARTRX(const std::filesystem::path &outputDir)
 {
@@ -576,7 +620,7 @@ void Emitter::emitTopFPGA(const std::vector<std::unique_ptr<NFA>> &nfas, const s
     // File Header
     out << "`timescale 1ns / 1ps\n\n"
         << "// =============================================================================\n"
-        << "// top_fpga.v — FPGA Top-Level\n"
+        << "// top_fpga.v -  FPGA Top-Level\n"
         << "// Regex count: " << numNFAs << "\n"
         << "//\n"
         << "// Architecture:\n"
@@ -879,7 +923,7 @@ void Emitter::emitTopFPGA(const std::vector<std::unique_ptr<NFA>> &nfas, const s
 }
 
 // =============================================================================
-// emitConstraints — constraints.xdc
+// emitConstraints -  constraints.xdc
 // =============================================================================
 void Emitter::emitConstraints(const std::vector<std::unique_ptr<NFA>> &nfas, const std::filesystem::path &outputDir)
 {
@@ -911,4 +955,294 @@ void Emitter::emitConstraints(const std::vector<std::unique_ptr<NFA>> &nfas, con
         out << "set_property PACKAGE_PIN " << led_pins[i] << " [get_ports {match_leds[" << i << "]}]\n"
             << "set_property IOSTANDARD LVCMOS33 [get_ports {match_leds[" << i << "]}]\n";
     }
+}
+
+void Emitter::emitPIIUART(const std::filesystem::path &outputDir)
+{
+    auto filePath = outputDir / "uart_rx.v";
+    std::ofstream out(filePath);
+    out.exceptions(std::ofstream::failbit | std::ofstream::badbit);
+
+    out << "`timescale 1ns / 1ps\n\n";
+    out << R"(
+module uart_rx #(
+    parameter CLKS_PER_BIT = 868 // 100 MHz / 115200 Baud
+)(
+    input  wire       clk,
+    input  wire       rx,
+    output reg  [7:0] rx_data,
+    output reg        rx_ready
+);
+    localparam IDLE = 2'b00, START_BIT = 2'b01, DATA_BITS = 2'b10, STOP_BIT = 2'b11;
+    reg [1:0] state = IDLE;
+    reg [9:0] clk_count = 0;
+    reg [2:0] bit_idx = 0;
+
+    always @(posedge clk) begin
+        case (state)
+            IDLE: begin
+                rx_ready <= 1'b0;
+                clk_count <= 0;
+                bit_idx <= 0;
+                if (rx == 1'b0) state <= START_BIT;
+            end
+            START_BIT: begin
+                if (clk_count == (CLKS_PER_BIT-1)/2) begin
+                    if (rx == 1'b0) begin
+                        clk_count <= 0;
+                        state <= DATA_BITS;
+                    end else state <= IDLE;
+                end else clk_count <= clk_count + 1;
+            end
+            DATA_BITS: begin
+                if (clk_count < CLKS_PER_BIT-1) begin
+                    clk_count <= clk_count + 1;
+                end else begin
+                    clk_count <= 0;
+                    rx_data[bit_idx] <= rx;
+                    if (bit_idx < 7) bit_idx <= bit_idx + 1;
+                    else state <= STOP_BIT;
+                end
+            end
+            STOP_BIT: begin
+                if (clk_count < CLKS_PER_BIT-1) begin
+                    clk_count <= clk_count + 1;
+                end else begin
+                    // FIX: Check for framing error
+                    if (rx == 1'b1) rx_ready <= 1'b1; 
+                    state <= IDLE;
+                end
+            end
+        endcase
+    end
+endmodule
+)";
+}
+
+void Emitter::emitPIIUARTTx(const std::filesystem::path &outputDir)
+{
+    auto filePath = outputDir / "uart_tx.v";
+    std::ofstream out(filePath);
+    out.exceptions(std::ofstream::failbit | std::ofstream::badbit);
+
+    out << "`timescale 1ns / 1ps\n\n";
+    out << R"(
+module uart_tx #(
+    parameter CLKS_PER_BIT = 868 // 100 MHz / 115200 Baud
+)(
+    input  wire       clk,
+    input  wire       tx_start,
+    input  wire [7:0] tx_data,
+    output reg        tx,
+    output reg        tx_busy
+);
+    localparam IDLE = 2'b00, START_BIT = 2'b01, DATA_BITS = 2'b10, STOP_BIT = 2'b11;
+    reg [1:0] state = IDLE;
+    reg [9:0] clk_count = 0;
+    reg [2:0] bit_idx = 0;
+    reg [7:0] tx_data_latch = 0;
+
+    initial begin
+        tx = 1'b1;
+        tx_busy = 1'b0;
+    end
+
+    always @(posedge clk) begin
+        case (state)
+            IDLE: begin
+                tx <= 1'b1;
+                tx_busy <= 1'b0;
+                if (tx_start) begin
+                    tx_data_latch <= tx_data;
+                    tx_busy <= 1'b1;
+                    state <= START_BIT;
+                    clk_count <= 0;
+                end
+            end
+            START_BIT: begin
+                tx <= 1'b0;
+                if (clk_count < CLKS_PER_BIT-1) begin
+                    clk_count <= clk_count + 1;
+                end else begin
+                    clk_count <= 0;
+                    bit_idx <= 0;
+                    state <= DATA_BITS;
+                end
+            end
+            DATA_BITS: begin
+                tx <= tx_data_latch[bit_idx];
+                if (clk_count < CLKS_PER_BIT-1) begin
+                    clk_count <= clk_count + 1;
+                end else begin
+                    clk_count <= 0;
+                    if (bit_idx < 7) bit_idx <= bit_idx + 1;
+                    else state <= STOP_BIT;
+                end
+            end
+            STOP_BIT: begin
+                tx <= 1'b1;
+                if (clk_count < CLKS_PER_BIT-1) begin
+                    clk_count <= clk_count + 1;
+                end else begin
+                    state <= IDLE;
+                end
+            end
+        endcase
+    end
+endmodule
+)";
+}
+
+void Emitter::emitPIITopFPGA(const std::vector<std::unique_ptr<NFA>> &nfas, const std::filesystem::path &outputDir)
+{
+    auto filePath = outputDir / "top_fpga.v";
+    std::ofstream out(filePath);
+    out.exceptions(std::ofstream::failbit | std::ofstream::badbit);
+
+    size_t numNFAs = nfas.size();
+
+    out << "`timescale 1ns / 1ps\n\n";
+    out << "module top_fpga (\n"
+        << "    input  wire clk,        // 100 MHz system clock\n"
+        << "    input  wire rst_btn,    // Physical reset button\n"
+        << "    input  wire uart_rx_pin,// USB UART RX pin\n"
+        << "    output wire uart_tx_pin // USB UART TX pin\n"
+        << ");\n\n";
+
+    out << R"(
+    wire [7:0] rx_data;
+    wire       rx_ready;
+    
+    uart_rx uart_inst (
+        .clk(clk),
+        .rx(uart_rx_pin),
+        .rx_data(rx_data),
+        .rx_ready(rx_ready)
+    );
+
+    reg        nfa_start = 1'b1;
+    reg  [7:0] nfa_char_in = 8'h00;
+    reg        nfa_en = 1'b0;
+)";
+
+    out << "    wire [" << (numNFAs > 0 ? numNFAs - 1 : 0) << ":0] match_bus;\n"
+        << "    wire [" << (numNFAs > 0 ? numNFAs - 1 : 0) << ":0] active_bus;\n\n";
+
+    out << "    top regex_engine (\n"
+        << "        .clk(clk),\n"
+        << "        .en(nfa_en),\n"
+        << "        .rst(rst_btn),\n"
+        << "        .start(nfa_start),\n"
+        << "        .char_in(nfa_char_in),\n"
+        << "        .match_bus(match_bus),\n"
+        << "        .active_bus(active_bus)\n"
+        << "    );\n\n";
+
+    out << R"(
+    // UART TX Signals
+    reg        tx_start = 1'b0;
+    reg  [7:0] tx_data = 8'h00;
+    wire       tx_busy;
+
+    uart_tx uart_tx_inst (
+        .clk(clk),
+        .tx_start(tx_start),
+        .tx_data(tx_data),
+        .tx(uart_tx_pin),
+        .tx_busy(tx_busy)
+    );
+
+    // 128-Byte Latency Buffering with Precise Alignment
+    localparam DELAY_LEN = 128;
+    (* ram_style = "distributed" *) reg [7:0] delay_bram [0:DELAY_LEN-1];
+    reg [6:0] delay_ptr = 0;
+    reg [DELAY_LEN-1:0] commit_history = 0;
+
+    // Per-NFA Active Histories to isolate redaction contexts
+)";
+    for (size_t i = 0; i < numNFAs; ++i)
+    {
+        out << "    reg [DELAY_LEN-1:0] active_history_" << i << " = 0;\n";
+    }
+
+    out << R"(
+    // Power-On-Reset Initialization
+    reg [7:0] por_count = 0;
+    wire por_rst = (por_count < 8'hFF);
+
+    reg rx_ready_prev = 0;
+    reg [1:0] step = 0;
+    reg [7:0] rx_latch = 0;
+
+    always @(posedge clk) begin
+        if (rst_btn || por_rst) begin
+            if (por_count < 8'h80) begin
+                delay_bram[por_count[6:0]] <= 8'h20; // Initialize BRAM sequentially
+            end
+            if (por_count < 8'hFF) por_count <= por_count + 1;
+            
+            nfa_en <= 0;
+            nfa_start <= 1;
+            tx_start <= 0;
+            rx_ready_prev <= 0;
+            delay_ptr <= 0;
+            commit_history <= 0;
+            step <= 0;
+)";
+    for (size_t i = 0; i < numNFAs; ++i)
+    {
+        out << "            active_history_" << i << " <= 0;\n";
+    }
+    out << R"(
+        end else begin
+            nfa_start <= 0;
+            nfa_en <= 0;
+            tx_start <= 0;
+            rx_ready_prev <= rx_ready;
+
+            // Character Processing Sequence
+            if (rx_ready && !rx_ready_prev) begin
+                rx_latch <= rx_data;
+                step <= 1;
+            end
+
+            case (step)
+                1: begin
+                    // Step 1: Feed NFA Engine
+                    nfa_char_in <= rx_latch;
+                    nfa_en <= 1;
+                    step <= 2;
+                end
+                2: begin
+                    // Step 2: NFA Results and Redaction Output
+                    // 1. Read delayed char and check redaction bit (Sampling BEFORE shift)
+                    tx_data <= (commit_history[DELAY_LEN-2]) ? 8'h58 : delay_bram[delay_ptr];
+                    tx_start <= 1;
+
+                    // 2. Overwrite slot with new character
+                    delay_bram[delay_ptr] <= rx_latch;
+                    delay_ptr <= delay_ptr + 1;
+
+                    // 3. Update Histories (Isolating contexts)
+)";
+    for (size_t i = 0; i < numNFAs; ++i)
+    {
+        out << "                    active_history_" << i << " <= active_bus[" << i << "] ? {active_history_" << i << "[DELAY_LEN-2:0], 1'b1} : 128'd0;\n";
+    }
+
+    out << "                    commit_history <= {commit_history[DELAY_LEN-2:0], 1'b0}";
+    for (size_t i = 0; i < numNFAs; ++i)
+    {
+        out << "\n                                      | (match_bus[" << i << "] ? {active_history_" << i << "[DELAY_LEN-2:0], 1'b1} : 128'd0)";
+    }
+    out << ";\n";
+
+    out << R"(
+                    step <= 0;
+                end
+            endcase
+        end
+    end
+endmodule
+)";
 }

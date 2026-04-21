@@ -24,10 +24,11 @@ public:
     static void emit(const std::vector<std::unique_ptr<NFA>> &nfas,
                      const std::string &outputDir,
                      const std::vector<std::string> &testStrings = {},
-                     const std::vector<std::string> &expectedMatches = {});
+                     const std::vector<std::string> &expectedMatches = {},
+                     bool isPII = false);
 
 private:
-    static void emitNFAModule(const NFA &nfa, const std::filesystem::path &outputDir);
+    static void emitNFAModule(const NFA &nfa, const std::filesystem::path &outputDir, bool isPII);
     static void emitTopModule(const std::vector<std::unique_ptr<NFA>> &nfas, const std::filesystem::path &outputDir);
     static void emitTestbench(const std::vector<std::unique_ptr<NFA>> &nfas,
                               const std::filesystem::path &outputDir,
@@ -45,6 +46,11 @@ private:
 
     // Top FPGA module
     static void emitTopFPGA(const std::vector<std::unique_ptr<NFA>> &nfas, const std::filesystem::path &outputDir);
+
+    // PII Guard specifics
+    static void emitPIIUART(const std::filesystem::path &outputDir);
+    static void emitPIIUARTTx(const std::filesystem::path &outputDir);
+    static void emitPIITopFPGA(const std::vector<std::unique_ptr<NFA>> &nfas, const std::filesystem::path &outputDir);
 
     static void emitConstraints(const std::vector<std::unique_ptr<NFA>> &nfas, const std::filesystem::path &outputDir);
 };
