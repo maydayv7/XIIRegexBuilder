@@ -6,7 +6,7 @@ import sys
 PORT = '/dev/ttyUSB1' 
 
 try:
-    ser = serial.Serial(PORT, 115200, timeout=1)
+    ser = serial.Serial(PORT, 115200, timeout=1, rtscts=True)
 except Exception as e:
     print(f"Failed to open {PORT}: {e}")
     print("Mocking stream output for demonstration purposes.")
