@@ -396,6 +396,7 @@ module uart_tx #(
     input  wire       clk,
     input  wire       tx_start,
     input  wire [7:0] tx_data,
+    input  wire       cts,      // Clear To Send (Active High)
     output reg        tx,
     output reg        tx_busy
 );
@@ -415,7 +416,7 @@ module uart_tx #(
             IDLE: begin
                 tx <= 1'b1;
                 tx_busy <= 1'b0;
-                if (tx_start) begin
+                if (tx_start && cts) begin
                     tx_data_latch <= tx_data;
                     tx_busy <= 1'b1;
                     state <= START_BIT;
@@ -471,6 +472,8 @@ void Emitter::emitTopFPGA(const std::vector<std::unique_ptr<NFA>> &nfas, const s
         << "    input  wire rst_btn,    // Physical reset button\n"
         << "    input  wire uart_rx_pin,// USB UART RX pin\n"
         << "    output wire uart_tx_pin,// USB UART TX pin\n"
+        << "    input  wire uart_cts_pin,// UART CTS pin (input to FPGA)\n"
+        << "    output wire uart_rts_pin,// UART RTS pin (output from FPGA)\n"
         << "    output reg  [" << (numNFAs > 0 ? numNFAs - 1 : 0) << ":0] match_leds // LEDs for match output\n"
         << ");\n\n";
 
@@ -511,6 +514,7 @@ void Emitter::emitTopFPGA(const std::vector<std::unique_ptr<NFA>> &nfas, const s
         .clk(clk),
         .tx_start(tx_start),
         .tx_data(tx_data),
+        .cts(uart_cts_pin),
         .tx(uart_tx_pin),
         .tx_busy(tx_busy)
     );
@@ -623,7 +627,11 @@ void Emitter::emitConstraints(const std::vector<std::unique_ptr<NFA>> &nfas, con
         << "set_property PACKAGE_PIN C4 [get_ports uart_rx_pin]\n"
         << "set_property IOSTANDARD LVCMOS33 [get_ports uart_rx_pin]\n"
         << "set_property PACKAGE_PIN D4 [get_ports uart_tx_pin]\n"
-        << "set_property IOSTANDARD LVCMOS33 [get_ports uart_tx_pin]\n\n";
+        << "set_property IOSTANDARD LVCMOS33 [get_ports uart_tx_pin]\n"
+        << "set_property PACKAGE_PIN C17 [get_ports uart_rts_pin]\n"
+        << "set_property IOSTANDARD LVCMOS33 [get_ports uart_rts_pin]\n"
+        << "set_property PACKAGE_PIN D18 [get_ports uart_cts_pin]\n"
+        << "set_property IOSTANDARD LVCMOS33 [get_ports uart_cts_pin]\n\n";
 
     out << "## Buttons (Nexys A7 Center Button - BTNC)\n"
         << "set_property PACKAGE_PIN N17 [get_ports rst_btn]\n"
