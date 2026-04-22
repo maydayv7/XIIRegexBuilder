@@ -504,6 +504,19 @@ void Emitter::emitTopFPGA(const std::vector<std::unique_ptr<NFA>> &nfas, const s
         << "        .match_bus(match_bus)\n"
         << "    );\n\n";
 
+    out << "    function [7:0] get_redaction_length;\n"
+        << "        input [" << (numNFAs > 0 ? numNFAs - 1 : 0) << ":0] matches;\n"
+        << "        begin\n"
+        << "            get_redaction_length = 8'd0;\n";
+    for (size_t i = 0; i < numNFAs; ++i)
+    {
+        int len = static_cast<int>(nfas[i]->states.size()) - 1;
+        if (len > 255) len = 255;
+        out << "            if (matches[" << i << "]) get_redaction_length = 8'd" << len << ";\n";
+    }
+    out << "        end\n"
+        << "    endfunction\n\n";
+
     out << R"(
     // UART TX instantiation
     reg        tx_start = 1'b0;
@@ -532,9 +545,7 @@ void Emitter::emitTopFPGA(const std::vector<std::unique_ptr<NFA>> &nfas, const s
     reg [3:0] fifo_tail = 0;
     reg [4:0] fifo_count = 0;
 
-    // Word counter to track length of current sequence (resets on space)
-    reg [4:0] word_counter = 0;
-
+    // Word counter removed, using precise lengths
     reg rx_ready_prev = 0;
     
     always @(posedge clk) begin
@@ -548,7 +559,6 @@ void Emitter::emitTopFPGA(const std::vector<std::unique_ptr<NFA>> &nfas, const s
             fifo_head <= 0;
             fifo_tail <= 0;
             fifo_count <= 0;
-            word_counter <= 0;
             for (i=0; i<32; i=i+1) delay_line[i] <= 8'h20; // Initialize with spaces
         end else begin
             nfa_start <= 0;
@@ -560,7 +570,6 @@ void Emitter::emitTopFPGA(const std::vector<std::unique_ptr<NFA>> &nfas, const s
             if (rx_ready && !rx_ready_prev && (rx_data == 8'h00 || rx_data == 8'h0D)) begin
                 nfa_start <= 1;
                 redact_line <= 32'd0;
-                word_counter <= 0;
                 for (i=0; i<32; i=i+1) delay_line[i] <= 8'h20; // Clear delay line with spaces
             end
 
@@ -576,10 +585,6 @@ void Emitter::emitTopFPGA(const std::vector<std::unique_ptr<NFA>> &nfas, const s
                 nfa_char_in <= rx_data;
                 nfa_en <= 1; 
 
-                // Update word counter (Capped at 31)
-                if (rx_data == 8'h20) word_counter <= 0;
-                else if (word_counter < 31) word_counter <= word_counter + 1;
-
                 // Push mux_out to FIFO
                 if (fifo_count < 16) begin
                     fifo_mem[fifo_head] <= mux_out;
@@ -588,12 +593,11 @@ void Emitter::emitTopFPGA(const std::vector<std::unique_ptr<NFA>> &nfas, const s
                 end
             end
 
-            // Update Match LEDs and mark redaction bits (Surgical Word Redaction)
+            // Update Match LEDs and mark redaction bits (Precise Redaction)
             if (|match_bus) begin
                 match_leds <= match_bus;
-                // Redact exactly the current word starting from index 0
                 for (j = 0; j < 32; j = j + 1) begin
-                    if (j < word_counter) begin
+                    if (j < get_redaction_length(match_bus)) begin
                         redact_line[j] <= 1'b1;
                     end
                 end
