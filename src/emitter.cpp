@@ -532,84 +532,83 @@ void Emitter::emitTopFPGA(const std::vector<std::unique_ptr<NFA>> &nfas, const s
         .tx_busy(tx_busy)
     );
 
-    // 32-Byte Delay Line (Parallel data and redaction bits)
-    reg [7:0] delay_line [0:31];
-    reg [31:0] redact_line = 32'd0;
-    integer i, j;
+    // 4KiB BRAM Ring Buffer
+    reg [7:0] data_buffer [0:4095];
+    reg [0:0] redact_buffer [0:4095];
+    reg [11:0] write_ptr = 0;
+    reg [11:0] read_ptr = 0;
+    reg [11:0] redact_ptr = 0;
+    reg [7:0] redact_count = 0;
     
-    wire [7:0] mux_out = (redact_line[31]) ? 8'h58 : delay_line[31]; // 'X' is 8'h58
+    // FSM States
+    localparam S_NORMAL = 1'b0, S_REDACT = 1'b1;
+    reg state = S_NORMAL;
 
-    // 16-Byte Output FIFO to prevent UART character loss
-    reg [7:0] fifo_mem [0:15];
-    reg [3:0] fifo_head = 0;
-    reg [3:0] fifo_tail = 0;
-    reg [4:0] fifo_count = 0;
+    integer i;
+    
+    // RTS Logic: Pause host if buffer is nearly full (>4000 entries)
+    wire [11:0] buffer_fill = write_ptr - read_ptr;
+    assign uart_rts_pin = (buffer_fill > 12'd4000); 
 
-    // Word counter removed, using precise lengths
     reg rx_ready_prev = 0;
+    reg reading = 0;
     
     always @(posedge clk) begin
         if (rst_btn) begin
             nfa_en <= 0;
             nfa_start <= 1;
-            redact_line <= 32'd0;
             tx_start <= 0;
             rx_ready_prev <= 0;
             match_leds <= 0;
-            fifo_head <= 0;
-            fifo_tail <= 0;
-            fifo_count <= 0;
-            for (i=0; i<32; i=i+1) delay_line[i] <= 8'h20; // Initialize with spaces
+            write_ptr <= 0;
+            read_ptr <= 0;
+            state <= S_NORMAL;
+            redact_count <= 0;
+            reading <= 0;
         end else begin
             nfa_start <= 0;
             nfa_en <= 0;
             tx_start <= 0;
             rx_ready_prev <= rx_ready;
 
-            // Global Reset on Null (8'h00) or Carriage Return (8'h0D)
-            if (rx_ready && !rx_ready_prev && (rx_data == 8'h00 || rx_data == 8'h0D)) begin
-                nfa_start <= 1;
-                redact_line <= 32'd0;
-                for (i=0; i<32; i=i+1) delay_line[i] <= 8'h20; // Clear delay line with spaces
-            end
-
-            // Process Incoming Byte (Push to Delay Line and FIFO)
+            // Port A: RX Write 
             if (rx_ready && !rx_ready_prev) begin
-                for (i=31; i>0; i=i-1) begin
-                    delay_line[i] <= delay_line[i-1];
-                    redact_line[i] <= redact_line[i-1];
-                end
-                delay_line[0] <= rx_data;
-                redact_line[0] <= 1'b0;
+                data_buffer[write_ptr] <= rx_data;
+                redact_buffer[write_ptr] <= 1'b0;
+                write_ptr <= write_ptr + 1;
                 
                 nfa_char_in <= rx_data;
                 nfa_en <= 1; 
-
-                // Push mux_out to FIFO
-                if (fifo_count < 16) begin
-                    fifo_mem[fifo_head] <= mux_out;
-                    fifo_head <= fifo_head + 1;
-                    fifo_count <= fifo_count + 1;
-                end
             end
 
-            // Update Match LEDs and mark redaction bits (Precise Redaction)
-            if (|match_bus) begin
-                match_leds <= match_bus;
-                for (j = 0; j < 32; j = j + 1) begin
-                    if (j < get_redaction_length(match_bus)) begin
-                        redact_line[j] <= 1'b1;
+            // Port B: FSM (Retroactive Redaction & TX Read)
+            case (state)
+                S_NORMAL: begin
+                    if (|match_bus) begin
+                        match_leds <= match_bus;
+                        redact_ptr <= write_ptr - 1;
+                        redact_count <= get_redaction_length(match_bus);
+                        state <= S_REDACT;
+                    end else if (buffer_fill > 12'd2048 && !tx_busy && !tx_start && !reading) begin
+                        reading <= 1;
+                    end else if (reading) begin
+                        tx_data <= (redact_buffer[read_ptr]) ? 8'h58 : data_buffer[read_ptr];
+                        tx_start <= 1;
+                        read_ptr <= read_ptr + 1;
+                        reading <= 0;
                     end
                 end
-            end
 
-            // Pop from FIFO to UART TX
-            if (fifo_count > 0 && !tx_busy && !tx_start) begin
-                tx_data <= fifo_mem[fifo_tail];
-                fifo_tail <= fifo_tail + 1;
-                fifo_count <= fifo_count - 1;
-                tx_start <= 1;
-            end
+                S_REDACT: begin
+                    if (redact_count > 0) begin
+                        redact_buffer[redact_ptr] <= 1'b1;
+                        redact_ptr <= redact_ptr - 1;
+                        redact_count <= redact_count - 1;
+                    end else begin
+                        state <= S_NORMAL;
+                    end
+                end
+            endcase
         end
     end
 endmodule
