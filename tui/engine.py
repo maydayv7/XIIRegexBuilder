@@ -14,7 +14,7 @@ Usage
     --port    Serial port (default: auto-detect first USB-Serial)
     --baud    Baud rate   (default: 115200)
     --regexes Path to inputs/regexes.txt for label display (optional but
-              strongly recommended — falls back to "Regex 0", "Regex 1", …)
+              strongly recommended -  falls back to "Regex 0", "Regex 1", …)
 
 Protocol
 ────────
@@ -24,10 +24,10 @@ Protocol
 
 Controls
 ────────
-  Enter         — send current input to FPGA
-  Ctrl-C / q    — quit
-  Ctrl-L        — clear input line
-  ?             — query current counters without sending a string
+  Enter         -  send current input to FPGA
+  Ctrl-C / q    -  quit
+  Ctrl-L        -  clear input line
+  ?             -  query current counters without sending a string
 """
 
 import argparse
@@ -73,7 +73,7 @@ RESPONSE_RE = _re.compile(
 
 # ─────────────────────────────────────────────────────────────────────────────
 def load_regexes(path: str) -> list[str]:
-    """Parse regexes.txt — skip blank lines and comments."""
+    """Parse regexes.txt -  skip blank lines and comments."""
     patterns = []
     try:
         with open(path) as f:
@@ -158,7 +158,7 @@ def reader_thread(
                 state.update_from_response(line, sent)
         except serial.SerialException:
             with state.lock:
-                state.status_msg = "Serial error — disconnected"
+                state.status_msg = "Serial error -  disconnected"
                 state.connected = False
             break
         except Exception:
@@ -203,7 +203,7 @@ def build_match_table(state: MatchState, patterns: list[str]) -> Table:
                 if matched:
                     match_cell = Text("● MATCH", style="bold green")
                 else:
-                    match_cell = Text("○ —", style="dim red")
+                    match_cell = Text("○ - ", style="dim red")
 
                 row_data.extend(
                     [
@@ -225,7 +225,7 @@ def build_stats_panel(state: MatchState) -> Panel:
     with state.lock:
         bc = state.byte_count
         last_s = state.last_string or "(none)"
-        raw = state.last_response_raw or "—"
+        raw = state.last_response_raw or "- "
         status = state.status_msg
         conn = state.connected
 

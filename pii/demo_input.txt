@@ -1,0 +1,80 @@
+INCIDENT LOG - DATA PRIVACY AUDIT
+====================================
+
+[2026-04-23] INFO: System initialization complete. Scanning stream for sensitive data.
+[2026-04-23] USER: Alice (alice.smith@example.com) logged in from IP 10.0.0.42.
+[2026-04-23] TRANSACTION: Processing payment for order #8821. CC: 4111222233334444.
+[2026-04-23] RECORD: Patient John Doe (SSN: 999-12-4455) visited the clinic.
+[2026-04-23] SUPPORT: Received call from customer at 555-123-4567 regarding billing.
+[2026-04-23] NETWORK: Potential breach detected from source 192.168.1.105.
+[2026-04-23] FINANCE: Refund issued to 1111222233334444.
+[2026-04-23] HR: Background check for candidate with SSN 123-44-5678 completed.
+[2026-04-23] CONTACT: Reach out to tech.support@corporation.net for server 172.16.254.1.
+
+Customer Registry Entry #1: Robert Johnson, 5550192837, r.johnson@provider.com, IP: 8.8.8.8.
+Customer Registry Entry #2: Sarah Connor, 123-456-7890, s.connor@resistance.io, SSN: 000-00-0001.
+Customer Registry Entry #3: Thomas Anderson, 9998887776, neo@matrix.net, CC: 5555444433332222.
+Customer Registry Entry #4: Bruce Wayne, 1112223333, batman@gotham.city, IP: 127.0.0.1.
+
+Employee Payroll Export:
+Name: James Howlett, DOB: 1880-10-21, SSN: 001-01-0001, Phone: 9005550199.
+Name: Wade Wilson, DOB: 1973-11-22, SSN: 666-00-6666, Phone: 555-555-1212.
+Name: Peter Parker, DOB: 2001-08-10, SSN: 201-00-1234, Email: spider.man@queens.ny.us.
+
+Web Access Log Snippets:
+192.168.1.1 - - [2026-04-23:10:00:00] "GET /admin/login HTTP/1.1" 200
+10.42.1.254 - - [2026-04-23:10:05:22] "POST /api/v1/auth/email=dev.user@internal.dev" 200
+172.31.0.100 - - [2026-04-23:10:10:45] "PUT /users/update/cc=4242424242424242" 403
+
+Medical Database Backup:
+RecordID, FullName, Identification, ContactPhone, DateOfEntry
+1001, Arthur Dent, 042-00-1234, 444-555-6666, 2026-04-23
+1002, Ford Prefect, 999-99-9999, 1234567890, 2026-04-23
+1003, Tricia McMillan, 111-22-3333, 555-010-9988, 2026-04-23
+
+Infrastructure Status:
+Gateway 1: 10.0.0.1 (Active)
+Gateway 2: 10.0.0.2 (Standby)
+Monitoring Node: monitoring.admin@cluster.local
+Database Cluster Primary: 10.0.5.10
+Database Cluster Replica: 10.0.5.11
+
+Internal Communications:
+From: accounting@firm.com
+To: executive.assistant@firm.com
+Subject: Quarterly SSN Verification
+Please verify the following tax IDs: 555-66-7788, 444-33-2211, and 111-00-1111.
+Payments were sent to Visa ending in 4111222233334444.
+
+Automated Alert:
+Unauthorized login attempt for user admin@secure.vault.com.
+Originating IP: 185.22.33.44.
+Time: 2026-04-23 15:30:12.
+
+Legacy System Migration Data:
+OLD_PHONE: 2125550198 -> NEW_PHONE: 212-555-0198
+OLD_CC: 1234123412341234 -> NEW_CC: 1234123412341234
+OLD_IP: 192.168.000.001 -> NEW_IP: 192.168.0.1
+
+Testing various phone formats:
+- 1234567890 (redact)
+- 123-456-7890 (redact)
+- 123.456.7890 (no redact)
+- (123) 456-7890 (no redact)
+
+Testing overlapping patterns:
+Email containing digits: user1234567890@site.com
+IP containing SSN-like block: 123.45.67.89
+CC following an IP: 10.0.0.1 4111222233334444
+
+End of Batch Data Processing.
+Timestamp: 2026-04-23 23:59:59.
+Status: Success.
+Archive IP: 10.10.10.10
+Encryption Key ID: 5551234567890123
+
+Closing stream.
+Final Audit Date: 2026-04-23.
+Reporting SSN: 000-00-0000.
+Final verification: CC 9999888877776666.
+Goodbye.
