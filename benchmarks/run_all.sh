@@ -4,12 +4,20 @@
 mkdir -p build
 g++ -Wall -Wextra -std=c++17 -Isrc -o benchmarks/bench_cpp benchmarks/bench_cpp.cpp
 
-LARGE_TEST="inputs/large_test_strings.txt"
-REGEX_FILE="inputs/regexes.txt"
+# Asset paths
+BENCH_ASSETS_DIR="benchmarks/assets"
+LARGE_TEST="${BENCH_ASSETS_DIR}/bench_strings.txt"
+REGEX_FILE="${BENCH_ASSETS_DIR}/bench_regexes.txt"
+
+# Fallback to old paths if assets dir doesn't exist
+if [ ! -d "$BENCH_ASSETS_DIR" ]; then
+    LARGE_TEST="inputs/large_test_strings.txt"
+    REGEX_FILE="inputs/regexes.txt"
+fi
 
 if [ ! -f "$LARGE_TEST" ]; then
-    echo "Large test file not found. Generating..."
-    python3 benchmarks/generate_large_data.py
+    echo "Large test file not found ($LARGE_TEST). Please run 'make benchmark' or 'python3 benchmarks/generate_benchmark_assets.py'"
+    exit 1
 fi
 
 NUM_REGEX=$(grep -v "^#" "$REGEX_FILE" | grep -v "^$" | wc -l | tr -d ' ')

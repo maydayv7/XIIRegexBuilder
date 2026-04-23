@@ -122,13 +122,18 @@ proc_synth: proc_asm | $(PROC_BUILD_DIR)
 proc_program:
 	$(MAKE) program BITSTREAM=$(PROC_BUILD_DIR)/top_fpga.bit
 
+# Benchmark Variables
+BENCH_REGEX_COUNT ?= 70
+BENCH_STRING_COUNT ?= 10000
+BENCH_ASSETS_DIR = benchmarks/assets
+
 # Benchmark Targets
 benchmark: $(GOLDEN)
-	@echo "Generating large test data..."
-	python3 benchmarks/generate_large_data.py
+	@echo "Generating random benchmark assets ($(BENCH_REGEX_COUNT) regexes, $(BENCH_STRING_COUNT) strings)..."
+	python3 benchmarks/generate_benchmark_assets.py $(BENCH_REGEX_COUNT) $(BENCH_STRING_COUNT)
 	@echo "Generating golden matches for verification..."
 	$(call MKDIR,$(OUTPUT_DIR))
-	./$(GOLDEN) $(INPUT_DIR)/regexes.txt inputs/large_test_strings.txt $(OUTPUT_DIR)/expected_matches.txt
+	./$(GOLDEN) $(BENCH_ASSETS_DIR)/bench_regexes.txt $(BENCH_ASSETS_DIR)/bench_strings.txt $(OUTPUT_DIR)/expected_matches.txt
 	@echo "Running performance comparison..."
 	./benchmarks/run_all.sh
 
@@ -137,7 +142,9 @@ clean:
 	-$(RMDIR) $(call FIX_PATH,$(BUILD_DIR))
 	-$(RMDIR) $(call FIX_PATH,$(OUTPUT_DIR))
 	-$(RMDIR) $(call FIX_PATH,processor/build)
+	-$(RMDIR) $(call FIX_PATH,$(BENCH_ASSETS_DIR))
 	-$(RM) benchmarks/bench_cpp
+	-$(RM) benchmarks/bench_fpga_eth
 	-$(RM) *_matches.txt
 	-$(RM) *.bit *.log *.jou *.pb *.wdb *.str usage_statistics_webtalk.*
 	-$(RM) clockInfo.txt dfx_runtime.txt
