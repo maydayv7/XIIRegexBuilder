@@ -1,45 +1,100 @@
-# Test Strings
-# Each line is a test string
+
 cat
-dog
-tomcat
 cot
-cut
-ct
-doog
-dg
-beep
-bep
-bp
-fly
-fy
-apple
-orange
-banana
-redcar
-bluecar
-greencar
-lolo
-lololo
-lo
-good
-goodod
-go
-hello
-llo
-he
-ad
-abd
-acd
-abcd
-the end
-end
-xay
-xayxby
-xy
-ac
-bd
-bc
-1234
-14
-124
+cot
+cat
+cot 
+cat 
+cat
+cot
+cot
+cat
+cot 
+cat cat
+cot
+cot
+cat
+cot 
+cat cat
+cot
+cot
+cat
+cot 
+cat cat
+cot
+cot
+cat
+cot 
+cat cat
+cot
+cot
+cat
+cot 
+cat cat
+cot
+cot
+cat
+cot 
+cat cat
+cot
+cot
+cat
+cot 
+cat cat
+cot
+cot
+cat
+cot 
+cat cat
+cot
+cot
+cat
+cot 
+cat cat
+cot
+cot
+cat
+cot 
+cat cat
+cot
+cot
+cat
+cot 
+cat cat
+cot
+cot
+cat
+cot 
+cat cat
+cot
+cot
+cat
+cot 
+cat cat
+cot
+cot
+cat
+cot 
+cat cat
+cot
+cot
+cat
+cot 
+cat cat
+cot
+cot
+cat
+cot 
+cat cat
+cot
+cot
+cat
+cot 
+cat cat
+cot
+cot
+cat
+cot 
+cat cat
+cot
+cot

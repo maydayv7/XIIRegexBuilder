@@ -9,12 +9,14 @@ ifeq ($(OS),Windows_NT)
     RMDIR := rmdir /s /q
     MKDIR = if not exist $(subst /,\,$1) mkdir $(subst /,\,$1)
     FIX_PATH = $(subst /,\,$1)
+    PYTHON := python
 else
     EXE :=
     RM := rm -f
     RMDIR := rm -rf
     MKDIR = mkdir -p $1
     FIX_PATH = $1
+    PYTHON := python3
 endif
 
 CC = g++
@@ -70,13 +72,13 @@ $(OUTPUT_DIR):
 all: $(TARGET) $(GOLDEN)
 
 run: all | $(OUTPUT_DIR)
-	$(TARGET) $(INPUT_DIR)/regexes.txt $(INPUT_DIR)/test_strings.txt $(OUTPUT_DIR)
+	$(call FIX_PATH,$(TARGET)) $(INPUT_DIR)/regexes.txt $(INPUT_DIR)/test_strings.txt $(OUTPUT_DIR)
 
 test: $(TESTER)
-	$(TESTER) $(INPUT_DIR)/regexes.txt $(INPUT_DIR)/test_strings.txt
+	$(call FIX_PATH,$(TESTER)) $(INPUT_DIR)/regexes.txt $(INPUT_DIR)/test_strings.txt
 
 golden: $(GOLDEN) | $(OUTPUT_DIR)
-	$(GOLDEN) $(INPUT_DIR)/regexes.txt $(INPUT_DIR)/test_strings.txt $(OUTPUT_DIR)/expected_matches.txt
+	$(call FIX_PATH,$(GOLDEN)) $(INPUT_DIR)/regexes.txt $(INPUT_DIR)/test_strings.txt $(OUTPUT_DIR)/expected_matches.txt
 
 sim: run
 	@echo "1. Compiling Verilog files..."
@@ -99,8 +101,8 @@ program:
 
 # Processor Targets
 proc_asm: | $(PROC_BUILD_DIR)
-	python $(PROC_PY_DIR)/compile_regex.py $(PROC_SRC_DIR)/regex.txt $(PROC_BUILD_DIR)/regexes.rasm
-	python $(PROC_PY_DIR)/asm.py $(PROC_BUILD_DIR)/regexes.rasm $(PROC_BUILD_DIR)/imem.hex
+	$(PYTHON) $(PROC_PY_DIR)/compile_regex.py $(PROC_SRC_DIR)/regex.txt $(PROC_BUILD_DIR)/regexes.rasm
+	$(PYTHON) $(PROC_PY_DIR)/asm.py $(PROC_BUILD_DIR)/regexes.rasm $(PROC_BUILD_DIR)/imem.hex
 
 proc_sim: proc_asm
 	@echo "1. Compiling Verilog files for Processor..."
@@ -111,9 +113,9 @@ proc_sim: proc_asm
 	$(XSIM) cpu_sim -R
 
 proc_update_regex: | $(PROC_BUILD_DIR)
-	python $(PROC_PY_DIR)/compile_regex.py $(PROC_SRC_DIR)/regex.txt $(PROC_BUILD_DIR)/regexes.rasm
-	python $(PROC_PY_DIR)/asm.py $(PROC_BUILD_DIR)/regexes.rasm $(PROC_BUILD_DIR)/imem.hex
-	python $(PROC_PY_DIR)/prog_fpga.py $(PROC_BUILD_DIR)/imem.hex
+	$(PYTHON) $(PROC_PY_DIR)/compile_regex.py $(PROC_SRC_DIR)/regex.txt $(PROC_BUILD_DIR)/regexes.rasm
+	$(PYTHON) $(PROC_PY_DIR)/asm.py $(PROC_BUILD_DIR)/regexes.rasm $(PROC_BUILD_DIR)/imem.hex
+	$(PYTHON) $(PROC_PY_DIR)/prog_fpga.py $(PROC_BUILD_DIR)/imem.hex
 
 proc_synth: proc_asm | $(PROC_BUILD_DIR)
 	@echo "Launching Vivado Synthesis Flow for Processor..."
@@ -130,12 +132,16 @@ BENCH_ASSETS_DIR = benchmarks/assets
 # Benchmark Targets
 benchmark: $(GOLDEN)
 	@echo "Generating random benchmark assets ($(BENCH_REGEX_COUNT) regexes, $(BENCH_STRING_COUNT) strings)..."
-	python3 benchmarks/generate_benchmark_assets.py $(BENCH_REGEX_COUNT) $(BENCH_STRING_COUNT)
+	$(PYTHON) benchmarks/generate_benchmark_assets.py $(BENCH_REGEX_COUNT) $(BENCH_STRING_COUNT)
 	@echo "Generating golden matches for verification..."
 	$(call MKDIR,$(OUTPUT_DIR))
-	./$(GOLDEN) $(BENCH_ASSETS_DIR)/bench_regexes.txt $(BENCH_ASSETS_DIR)/bench_strings.txt $(OUTPUT_DIR)/expected_matches.txt
+	$(call FIX_PATH,$(GOLDEN)) $(BENCH_ASSETS_DIR)/bench_regexes.txt $(BENCH_ASSETS_DIR)/bench_strings.txt $(OUTPUT_DIR)/expected_matches.txt
 	@echo "Running performance comparison..."
+ifeq ($(OS),Windows_NT)
+	bash benchmarks/run_all.sh
+else
 	./benchmarks/run_all.sh
+endif
 
 clean:
 	-$(RM) $(call FIX_PATH,src/*.o)
@@ -143,11 +149,12 @@ clean:
 	-$(RMDIR) $(call FIX_PATH,$(OUTPUT_DIR))
 	-$(RMDIR) $(call FIX_PATH,processor/build)
 	-$(RMDIR) $(call FIX_PATH,$(BENCH_ASSETS_DIR))
-	-$(RM) benchmarks/bench_cpp
-	-$(RM) benchmarks/bench_fpga_eth
+	-$(RM) $(call FIX_PATH,benchmarks/bench_cpp$(EXE))
+	-$(RM) $(call FIX_PATH,benchmarks/bench_fpga_eth$(EXE))
 	-$(RM) *_matches.txt
 	-$(RM) *.bit *.log *.jou *.pb *.wdb *.str usage_statistics_webtalk.*
 	-$(RM) clockInfo.txt dfx_runtime.txt
-	-$(RMDIR) xsim.dir .Xil
+	-$(RMDIR) xsim.dir
+	-$(RMDIR) .Xil
 
-.PHONY: all run test golden synth program proc_asm proc_sim proc_update_regex proc_synth proc_program clean
+.PHONY: all run test golden sim synth program proc_asm proc_sim proc_update_regex proc_synth proc_program benchmark clean
