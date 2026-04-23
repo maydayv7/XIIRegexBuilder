@@ -18,7 +18,7 @@ else
 endif
 
 CC = g++
-CFLAGS = -Wall -Wextra -std=c++17 -Isrc -static
+CFLAGS = -Wall -Wextra -std=c++17 -Isrc
 BUILD_DIR = build
 TARGET = $(BUILD_DIR)/regex_builder$(EXE)
 TESTER = $(BUILD_DIR)/nfa_tester$(EXE)
@@ -127,6 +127,8 @@ clean:
 	-$(RMDIR) $(call FIX_PATH,$(BUILD_DIR))
 	-$(RMDIR) $(call FIX_PATH,$(OUTPUT_DIR))
 	-$(RMDIR) $(call FIX_PATH,processor/build)
+	-$(RM) benchmarks/bench_cpp
+	-$(RM) *_matches.txt
 	-$(RM) *.bit *.log *.jou *.pb *.wdb *.str usage_statistics_webtalk.*
 	-$(RM) clockInfo.txt dfx_runtime.txt
 	-$(RMDIR) xsim.dir .Xil
