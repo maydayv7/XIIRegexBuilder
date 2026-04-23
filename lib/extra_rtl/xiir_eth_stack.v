@@ -101,7 +101,7 @@ module xiir_eth_stack # (
      * MAC Layer (eth_mac_mii_fifo)
      */
     eth_mac_mii_fifo #(
-        .TARGET("XILINX"),
+        .TARGET("GENERIC"),
         .CLOCK_INPUT_STYLE("BUFR")
     ) eth_mac_inst (
         .rst(rst),
@@ -121,18 +121,21 @@ module xiir_eth_stack # (
         // AXI Stream RX (from MAC)
         .rx_axis_tdata(rx_axis_tdata),
         .rx_axis_tvalid(rx_axis_tvalid),
+        .rx_axis_tready(rx_axis_tready),
         .rx_axis_tlast(rx_axis_tlast),
         .rx_axis_tuser(rx_axis_tuser),
-        // MAC rx_axis doesn't have tready in some versions, but fifo one does
-        // eth_mac_mii_fifo has tready? Let's assume it does for flow control.
-        // If not, we'd need to use eth_mac_mii directly with axis_fifo.
 
         // AXI Stream TX (to MAC)
         .tx_axis_tdata(tx_axis_tdata),
         .tx_axis_tvalid(tx_axis_tvalid),
         .tx_axis_tlast(tx_axis_tlast),
         .tx_axis_tready(tx_axis_tready),
-        .tx_axis_tuser(tx_axis_tuser)
+        .tx_axis_tuser(tx_axis_tuser),
+
+        // Configuration
+        .cfg_ifg(8'd12),
+        .cfg_tx_enable(1'b1),
+        .cfg_rx_enable(1'b1)
     );
 
     /*
