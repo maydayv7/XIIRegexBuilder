@@ -588,7 +588,7 @@ void Emitter::emitTopFPGA(const std::vector<std::unique_ptr<NFA>> &nfas, const s
                 2: begin
                     // Step 2: NFA Results and Redaction Output
                     // 1. Read delayed char and check redaction bit (Sampling BEFORE shift)
-                    tx_data <= (commit_history[DELAY_LEN-1]) ? 8'h58 : delay_bram[delay_ptr];
+                    tx_data <= (commit_history[DELAY_LEN-2]) ? 8'h58 : delay_bram[delay_ptr];
                     tx_start <= 1;
 
                     // 2. Overwrite slot with new character
