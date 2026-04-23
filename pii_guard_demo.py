@@ -4,9 +4,10 @@ import sys
 
 # Update the port depending on your OS/Setup (e.g., COM3 on Windows)
 PORT = '/dev/ttyUSB1' 
+BAUD = 921600 # High-speed production baud rate
 
 try:
-    ser = serial.Serial(PORT, 115200, timeout=1, rtscts=True)
+    ser = serial.Serial(PORT, BAUD, timeout=1, rtscts=True)
 except Exception as e:
     print(f"Failed to open {PORT}: {e}")
     print("Mocking stream output for demonstration purposes.")
