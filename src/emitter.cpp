@@ -512,28 +512,14 @@ void Emitter::emitTopFPGA(const std::vector<std::unique_ptr<NFA>> &nfas, const s
         << "        .active_bus(active_bus)\n"
         << "    );\n\n";
 
-    out << R"(
-    // UART TX instantiation
-    reg        tx_start = 1'b0;
-    reg  [7:0] tx_data = 8'h00;
-    wire       tx_busy;
-
-    uart_tx uart_tx_inst (
-        .clk(clk),
-        .tx_start(tx_start),
-        .tx_data(tx_data),
-        .tx(uart_tx_pin),
-        .tx_busy(tx_busy)
-    );
-
-    // 32-Byte Latency Buffering with Sequencing
-    localparam DELAY_LEN = 32;
-    reg [7:0] delay_bram [0:DELAY_LEN-1];
-    reg [4:0] delay_ptr = 0;
-    reg [DELAY_LEN-1:0] commit_history = 0;
-
-    // Per-NFA Active Histories to isolate redaction contexts
-)";
+    // 128-Byte Latency Buffering with Precise Alignment
+    const int DELAY_VAL = 128;
+    out << "    // 128-Byte Latency Buffering with Precise Alignment\n"
+        << "    localparam DELAY_LEN = " << DELAY_VAL << ";\n"
+        << "    reg [7:0] delay_bram [0:DELAY_LEN-1];\n"
+        << "    reg [6:0] delay_ptr = 0;\n"
+        << "    reg [DELAY_LEN-1:0] commit_history = 0;\n\n"
+        << "    // Per-NFA Active Histories to isolate redaction contexts\n";
     for (size_t i = 0; i < numNFAs; ++i) {
         out << "    reg [DELAY_LEN-1:0] active_history_" << i << " = 0;\n";
     }
@@ -549,10 +535,11 @@ void Emitter::emitTopFPGA(const std::vector<std::unique_ptr<NFA>> &nfas, const s
 
     always @(posedge clk) begin
         if (rst_btn || por_rst) begin
-            if (por_count < 8'hFF) begin
-                delay_bram[por_count[4:0]] <= 8'h20; // Initialize BRAM sequentially
-                por_count <= por_count + 1;
+            if (por_count < 8'h80) begin
+                delay_bram[por_count[6:0]] <= 8'h20; // Initialize BRAM sequentially
             end
+            if (por_count < 8'hFF) por_count <= por_count + 1;
+            
             nfa_en <= 0;
             nfa_start <= 1;
             tx_start <= 0;
@@ -585,8 +572,8 @@ void Emitter::emitTopFPGA(const std::vector<std::unique_ptr<NFA>> &nfas, const s
                     step <= 2;
                 end
                 2: begin
-                    // Step 2: NFA Match is now valid for rx_latch
-                    // 1. Read delayed char and check redaction bit
+                    // Step 2: NFA Results and Redaction Output
+                    // 1. Read delayed char and check redaction bit (Sampling BEFORE shift)
                     tx_data <= (commit_history[DELAY_LEN-1]) ? 8'h58 : delay_bram[delay_ptr];
                     tx_start <= 1;
 
@@ -594,7 +581,7 @@ void Emitter::emitTopFPGA(const std::vector<std::unique_ptr<NFA>> &nfas, const s
                     delay_bram[delay_ptr] <= rx_latch;
                     delay_ptr <= delay_ptr + 1;
 
-                    // 3. Update Histories
+                    // 3. Update Histories (Isolating contexts)
 )";
     for (size_t i = 0; i < numNFAs; ++i) {
         out << "                    active_history_" << i << " <= {active_history_" << i << "[DELAY_LEN-2:0], active_bus[" << i << "]};\n";
@@ -602,7 +589,7 @@ void Emitter::emitTopFPGA(const std::vector<std::unique_ptr<NFA>> &nfas, const s
 
     out << "                    commit_history <= {commit_history[DELAY_LEN-2:0], 1'b0}";
     for (size_t i = 0; i < numNFAs; ++i) {
-        out << "\n                                      | (match_bus[" << i << "] ? {active_history_" << i << "[DELAY_LEN-2:0], 1'b1} : 32'd0)";
+        out << "\n                                      | (match_bus[" << i << "] ? {active_history_" << i << "[DELAY_LEN-2:0], 1'b1} : " << DELAY_VAL << "'d0)";
     }
     out << ";\n";
 

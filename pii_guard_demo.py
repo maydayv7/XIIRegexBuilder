@@ -36,6 +36,6 @@ def stream_text(text):
 
 if __name__ == "__main__":
     demo_text = "Hello! My CC is 4111222233334444 and my SSN is 123-45-6789. Contact user@example.com."
-    # Add 32 spaces to flush the FPGA's 32-char delay buffer
-    stream_text(demo_text + " " * 32)
+    # Add 128 spaces to flush the FPGA's 128-char delay buffer
+    stream_text(demo_text + " " * 128)
 
