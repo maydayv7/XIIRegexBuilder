@@ -406,7 +406,6 @@ module uart_tx #(
     input  wire       clk,
     input  wire       tx_start,
     input  wire [7:0] tx_data,
-    input  wire       cts,      // Clear To Send (Active High)
     output reg        tx,
     output reg        tx_busy
 );
@@ -426,7 +425,7 @@ module uart_tx #(
             IDLE: begin
                 tx <= 1'b1;
                 tx_busy <= 1'b0;
-                if (tx_start && cts) begin
+                if (tx_start) begin
                     tx_data_latch <= tx_data;
                     tx_busy <= 1'b1;
                     state <= START_BIT;
@@ -526,16 +525,15 @@ void Emitter::emitTopFPGA(const std::vector<std::unique_ptr<NFA>> &nfas, const s
         .clk(clk),
         .tx_start(tx_start),
         .tx_data(tx_data),
-        .cts(uart_cts_pin),
         .tx(uart_tx_pin),
         .tx_busy(tx_busy)
     );
 
-    // Exact-Boundary Shift-History Architecture (128 bytes latency)
-    localparam DELAY_LEN = 128;
+    // Exact-Boundary Shift-History Architecture (32 bytes latency)
+    localparam DELAY_LEN = 32;
     reg [7:0] delay_bram [0:DELAY_LEN-1];
-    reg [6:0] write_ptr = 0;
-    reg [6:0] read_ptr = 7'd1; // read_ptr is DELAY_LEN-1 cycles behind write_ptr
+    reg [4:0] write_ptr = 0;
+    reg [4:0] read_ptr = 5'd1; // read_ptr is DELAY_LEN-1 cycles behind write_ptr
     
     reg [DELAY_LEN-1:0] active_history = 0;
     reg [DELAY_LEN-1:0] commit_history = 0;
@@ -543,9 +541,7 @@ void Emitter::emitTopFPGA(const std::vector<std::unique_ptr<NFA>> &nfas, const s
     wire any_active = |active_bus;
     wire any_match = |match_bus;
     
-    // RTS: Active-low. 0 = Ready, 1 = Not Ready.
-    // We are NOT ready if tx_busy is high (simple flow control)
-    assign uart_rts_pin = tx_busy;
+    assign uart_rts_pin = 1'b0; // Always ready
 
     reg rx_ready_prev = 0;
     reg tx_pending = 0;
@@ -559,28 +555,23 @@ void Emitter::emitTopFPGA(const std::vector<std::unique_ptr<NFA>> &nfas, const s
             rx_ready_prev <= 0;
             match_leds <= 0;
             write_ptr <= 0;
-            read_ptr <= 7'd1;
+            read_ptr <= 5'd1;
             active_history <= 0;
             commit_history <= 0;
             tx_pending <= 0;
-            for (k=0; k<DELAY_LEN; k=k+1) delay_bram[k] <= 8'h20; // Init with spaces
+            for (k=0; k<DELAY_LEN; k=k+1) delay_bram[k] <= 8'h20; 
         end else begin
             nfa_start <= 0;
             nfa_en <= 0;
             rx_ready_prev <= rx_ready;
 
             if (rx_ready && !rx_ready_prev) begin
-                // Write Port: Store incoming char
                 delay_bram[write_ptr] <= rx_data;
-                
-                // Feed NFA Engine
                 nfa_char_in <= rx_data;
                 nfa_en <= 1; 
 
-                // Shift History Logs
                 active_history <= {active_history[DELAY_LEN-2:0], any_active};
                 
-                // Commit match spans OR just shift
                 if (any_match) begin
                     commit_history <= {commit_history[DELAY_LEN-2:0], 1'b0} | {active_history[DELAY_LEN-2:0], any_active};
                     match_leds <= match_bus; 
@@ -590,10 +581,9 @@ void Emitter::emitTopFPGA(const std::vector<std::unique_ptr<NFA>> &nfas, const s
 
                 write_ptr <= write_ptr + 1;
                 read_ptr <= read_ptr + 1;
-                tx_pending <= 1; // Mark for transmission
+                tx_pending <= 1; 
             end
 
-            // Transmission Logic
             if (tx_pending) begin
                 if (!tx_busy && !tx_start) begin
                     tx_data <= (commit_history[DELAY_LEN-1]) ? 8'h58 : delay_bram[read_ptr];
