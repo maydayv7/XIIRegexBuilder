@@ -40,23 +40,29 @@ def run_benchmark():
     
     seq_num = 0
     results = {}
+    total_results_count = 0
     
     print(f"Starting Ethernet Benchmark against {args.fpga_ip}...")
 
-    # For Phase 4/5 demonstration, we pack strings 1-per-packet to test RTT
-    # In a full run, we would batch them.
-    for s in strings:
-        payload = struct.pack(">IH", seq_num, 1) # Header
-        payload += struct.pack("B", len(s)) + s.encode('ascii') # Body
+    batch_size = 10
+    for i in range(0, len(strings), batch_size):
+        chunk = strings[i : i + batch_size]
+        
+        # Header: SEQ(4) | NUM_STR(2)
+        payload = struct.pack(">IH", seq_num, len(chunk))
+        
+        # Body: [LEN(1) | DATA(N)] x NUM
+        for s in chunk:
+            payload += struct.pack("B", len(s)) + s.encode('ascii')
         
         sock.sendto(payload, (args.fpga_ip, args.fpga_port))
         
         try:
-            data, addr = sock.recvfrom(2048)
+            data, addr = sock.recvfrom(65535)
             # Response: SEQ(4) | NUM(2) | STAMP(4) | [MATCH(bits) | HITS]
-            # Since we sent 1 string, we expect 1 result.
             res_seq, res_num, res_stamp = struct.unpack(">IHI", data[:10])
             results[res_seq] = data[10:]
+            total_results_count += res_num
             seq_num += 1
         except socket.timeout:
             print(f"Timeout on seq {seq_num}")
@@ -67,8 +73,8 @@ def run_benchmark():
     
     print("\n=== Ethernet Benchmark Summary ===")
     print(f"Total Time: {duration:.4f} seconds")
-    print(f"Throughput: {len(results)/duration:.2f} strings/sec")
-    print(f"Success: {len(results)}/{len(strings)}")
+    print(f"Throughput: {total_results_count/duration:.2f} strings/sec")
+    print(f"Success: {total_results_count}/{len(strings)} (Packets: {len(results)})")
     
     sock.close()
 

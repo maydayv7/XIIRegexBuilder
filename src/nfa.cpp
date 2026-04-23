@@ -39,6 +39,9 @@ bool NFA::simulate(const std::string& input) const {
 std::unique_ptr<NFA> NFABuilder::build(ASTNode* root, int regexIdx) {
     if (!root) return nullptr;
 
+    // Reset globalStateCounter for each NFA to ensure local IDs are stable (0, 1, 2...)
+    globalStateCounter = -1;
+
     auto nfa = std::make_unique<NFA>(regexIdx);
     
     // 1. Linearization (assign positions to symbols)

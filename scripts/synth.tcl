@@ -14,7 +14,7 @@ create_project -in_memory -part $part
 read_verilog [glob lib/verilog-ethernet/rtl/*.v]
 read_verilog lib/extra_rtl/phy_reset_fsm.v
 read_verilog lib/extra_rtl/cycle_counter.v
-read_verilog lib/extra_rtl/udp_complete.v
+read_verilog lib/extra_rtl/xiir_eth_stack.v
 
 # Generated Files
 read_verilog [glob output/nfa_*.v]

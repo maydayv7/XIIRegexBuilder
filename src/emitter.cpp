@@ -548,17 +548,18 @@ module uart_rx_fifo #(
             rd_ptr <= {DEPTH_LOG2{1'b0}};
             count  <= {(DEPTH_LOG2+1){1'b0}};
         end else begin
-            if (wr_en && !full && rd_en && !empty) begin
+            if (wr_en && !full) begin
                 mem[wr_ptr] <= wr_data;
                 wr_ptr      <= wr_ptr + 1;
+            end
+            if (rd_en && !empty) begin
                 rd_ptr      <= rd_ptr + 1;
-            end else if (wr_en && !full) begin
-                mem[wr_ptr] <= wr_data;
-                wr_ptr      <= wr_ptr + 1;
-                count       <= count + 1;
-            end else if (rd_en && !empty) begin
-                rd_ptr <= rd_ptr + 1;
-                count  <= count - 1;
+            end
+
+            if ((wr_en && !full) && !(rd_en && !empty)) begin
+                count <= count + 1;
+            end else if (!(wr_en && !full) && (rd_en && !empty)) begin
+                count <= count - 1;
             end
         end
     end
@@ -782,17 +783,17 @@ void Emitter::emitResultAssembler(const std::filesystem::path &outputDir, int nu
         << ");\n\n";
 
     out << "    localparam RESULT_SIZE = " << resultSizeBytes << ";\n"
-        << "    localparam MAX_RESULTS = 16;\n\n"
-        << "    reg [7:0] mem [0:8191]; // Buffer for results (8KB)\n"
-        << "    reg [12:0] write_ptr = 0;\n"
-        << "    reg [12:0] read_ptr = 0;\n"
+        << "    localparam MAX_RESULTS = 128;\n\n"
+        << "    reg [7:0] mem [0:32767]; // Buffer for results (32KB)\n"
+        << "    reg [14:0] write_ptr = 0;\n"
+        << "    reg [14:0] read_ptr = 0;\n"
+        << "    reg [14:0] latched_end_ptr = 0;\n"
         << "    reg [15:0] results_count = 0;\n"
         << "    reg [31:0] active_seq_num;\n"
         << "    reg [15:0] active_num_strings;\n"
         << "    reg [31:0] active_cycle_stamp;\n\n"
         << "    localparam IDLE = 2'd0, SEND_HEADER = 2'd1, SEND_RESULTS = 2'd2;\n"
         << "    reg [1:0] state = IDLE;\n"
-        << "    reg [10:0] send_count = 0;\n"
         << "    reg [3:0] header_idx = 0;\n\n"
         << "    always @(posedge clk) begin\n"
         << "        if (rst) begin\n"
@@ -800,6 +801,7 @@ void Emitter::emitResultAssembler(const std::filesystem::path &outputDir, int nu
         << "            write_ptr <= 0;\n"
         << "            results_count <= 0;\n"
         << "            m_axis_tvalid <= 0;\n"
+        << "            m_axis_tlast <= 0;\n"
         << "        end else begin\n"
         << "            if (result_valid) begin\n"
         << "                if (results_count == 0) begin\n"
@@ -838,6 +840,7 @@ void Emitter::emitResultAssembler(const std::filesystem::path &outputDir, int nu
         << "                        state <= SEND_HEADER;\n"
         << "                        header_idx <= 0;\n"
         << "                        read_ptr <= 0;\n"
+        << "                        latched_end_ptr <= write_ptr;\n"
         << "                    end\n"
         << "                end\n"
         << "                SEND_HEADER: begin\n"
@@ -857,16 +860,15 @@ void Emitter::emitResultAssembler(const std::filesystem::path &outputDir, int nu
         << "                    if (m_axis_tready) begin\n"
         << "                        if (header_idx == 9) begin\n"
         << "                            state <= SEND_RESULTS;\n"
-        << "                            send_count <= 0;\n"
         << "                        end else header_idx <= header_idx + 1;\n"
         << "                    end\n"
         << "                end\n"
         << "                SEND_RESULTS: begin\n"
         << "                    m_axis_tvalid <= 1;\n"
         << "                    m_axis_tdata <= mem[read_ptr];\n"
-        << "                    m_axis_tlast <= (read_ptr + 1 == write_ptr);\n"
+        << "                    m_axis_tlast <= (read_ptr + 1 == latched_end_ptr);\n"
         << "                    if (m_axis_tready) begin\n"
-        << "                        if (read_ptr + 1 == write_ptr) begin\n"
+        << "                        if (read_ptr + 1 == latched_end_ptr) begin\n"
         << "                            state <= IDLE;\n"
         << "                            results_count <= 0;\n"
         << "                            m_axis_tvalid <= 0;\n"
@@ -924,10 +926,10 @@ void Emitter::emitTopFPGA(const std::vector<std::unique_ptr<NFA>> &nfas, const s
         << "    localparam [15:0] LOCAL_PORT = 16'd7777;\n"
         << "    localparam [15:0] HOST_PORT  = 16'd7778;\n\n";
 
-    // 50 MHz Clock for Ethernet PHY
-    wire clk_50;
-    // In a real design, this would be an MMCM. For simulation/generic, we divide.
-    out << "    reg eth_refclk_reg = 0;\n"
+    out << "    // 50 MHz Clock for Ethernet PHY\n"
+        << "    wire clk_50;\n"
+        << "    // In a real design, this would be an MMCM. For simulation/generic, we divide.\n"
+        << "    reg eth_refclk_reg = 0;\n"
         << "    always @(posedge clk) eth_refclk_reg <= ~eth_refclk_reg;\n"
         << "    assign clk_50 = eth_refclk_reg;\n"
         << "    assign eth_refclk = clk_50;\n\n";
@@ -949,8 +951,8 @@ void Emitter::emitTopFPGA(const std::vector<std::unique_ptr<NFA>> &nfas, const s
         << "    wire        tx_udp_payload_tready;\n\n"
         << "    // Simplified instantiation of Forencich stack\n"
         << "    // In practice, this requires connecting ARP, IP, UDP modules\n"
-        << "    // Here we use a high-level wrapper concept for the emitter output\n"
-        << "    udp_complete #(\n"
+        << "    // Here we use a high-level wrapper concept for the emitter output\n";
+    out << "    xiir_eth_stack #(\n"
         << "        .LOCAL_MAC(LOCAL_MAC),\n"
         << "        .LOCAL_IP(LOCAL_IP)\n"
         << "    ) udp_stack_inst (\n"
