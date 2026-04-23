@@ -37,12 +37,20 @@ def stream_text(text):
     if ser:
         print("Redacted Stream: ", end="", flush=True)
         ser.reset_input_buffer()
+        
+        has_started = False
         for char in text:
             ser.write(char.encode())
             scrubbed = ser.read(1).decode('utf-8', errors='replace')
-            print(scrubbed, end="", flush=True)
-            time.sleep(0.01) 
-    else:
+            
+            # Skip leading spaces from the delay buffer initialization
+            if not has_started and scrubbed != ' ':
+                has_started = True
+                
+            if has_started:
+                print(scrubbed, end="", flush=True)
+                
+            time.sleep(0.002) # Faster streaming for large demo files    else:
         print("(MOCK) Redacted Stream: ", end="", flush=True)
         simulated = mock_redact(text)
         for char in simulated:
@@ -52,7 +60,9 @@ def stream_text(text):
     print("\n\nDone.")
 
 if __name__ == "__main__":
-    demo_text = "Hello! My CC is 4111222233334444 and my SSN is 123-45-6789. Contact user@example.com. Hello! My CC is 4111222233334444 and m SSN is 123-45-6789. Contact user@exam lea com. 4111222233334444 and m SSN is 123-45-6789. Contact user@exam lea com. 4111222233334444 and m SSN is 123-45-6789. Contact user@exam lea com. 4111222233334444 and m SSN is 123-45-6789. Contact user@exam lea com. 4111222233334444 and m SSN is 123-45-6789. Contact user@exam lea com. 4111222233334444 and m SSN is 123-45-6789. Contact user@exam lea com. 4111222233334444 and m SSN is 123-45-6789. Contact user@exam lea com. "
+    with open("demo_input.txt", "r") as f:
+        demo_text = f.read()
+    
     # Add 128 spaces to flush the FPGA's 128-char delay buffer
     stream_text(demo_text + " " * 128)
 
