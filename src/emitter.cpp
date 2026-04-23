@@ -528,7 +528,7 @@ void Emitter::emitTopFPGA(const std::vector<std::unique_ptr<NFA>> &nfas, const s
 
     // 128-Byte Latency Buffering with Precise Alignment
     localparam DELAY_LEN = 128;
-    reg [7:0] delay_bram [0:DELAY_LEN-1];
+    (* ram_style = "distributed" *) reg [7:0] delay_bram [0:DELAY_LEN-1];
     reg [6:0] delay_ptr = 0;
     reg [DELAY_LEN-1:0] commit_history = 0;
 
@@ -598,7 +598,7 @@ void Emitter::emitTopFPGA(const std::vector<std::unique_ptr<NFA>> &nfas, const s
                     // 3. Update Histories (Isolating contexts)
 )";
     for (size_t i = 0; i < numNFAs; ++i) {
-        out << "                    active_history_" << i << " <= {active_history_" << i << "[DELAY_LEN-2:0], active_bus[" << i << "]};\n";
+        out << "                    active_history_" << i << " <= active_bus[" << i << "] ? {active_history_" << i << "[DELAY_LEN-2:0], 1'b1} : 128'd0;\n";
     }
 
     out << "                    commit_history <= {commit_history[DELAY_LEN-2:0], 1'b0}";

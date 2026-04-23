@@ -15,7 +15,7 @@ INPUT_DIR = inputs
 OUTPUT_DIR = output
 
 # --- Vivado Simulation Tools ---
-VIVADO_PATH = vivado
+VIVADO_PATH = /mnt/c/AMDDesignTools/2025.2/Vivado/bin/vivado.bat
 XVLOG = xvlog
 XELAB = xelab
 XSIM  = xsim
@@ -54,11 +54,11 @@ golden: $(GOLDEN) | $(OUTPUT_DIR)
 # --- Hardware / FPGA Targets ---
 synth: run
 	@echo "--- Launching Vivado Synthesis Flow ---"
-	$(VIVADO_PATH) -mode batch -source synth.tcl
+	$(VIVADO_PATH) -mode batch -source synth.tcl -notrace
 
 program:
 	@echo "--- Launching Vivado Programming Flow ---"
-	$(VIVADO_PATH) -mode batch -source program.tcl
+	$(VIVADO_PATH) -mode batch -source program.tcl -notrace
 
 sim: run
 	@echo "--- 1. Compiling Verilog files with xvlog ---"

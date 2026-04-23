@@ -398,7 +398,8 @@ class PII_TUI(App):
                 log.scroll_end(animate=False)
             
             self.session_log.append(f"\n[TX] {text}\n")
-            self.send_to_fpga(text)
+            # Flush 128 chars to ensure immediate return of the sent text
+            self.send_to_fpga(text + " " * 128)
 
     def on_key(self, event: Key) -> None:
         """Handle history navigation with Up/Down arrows."""

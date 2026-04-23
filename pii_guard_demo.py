@@ -9,33 +9,50 @@ BAUD = 921600 # High-speed production baud rate
 try:
     ser = serial.Serial(PORT, 115200, timeout=1, rtscts=False)
 except Exception as e:
-    print(f"Failed to open {PORT}: {e}")
-    print("Mocking stream output for demonstration purposes.")
+    print(f"ERROR: Could not open {PORT}: {e}")
+    if "Permission denied" in str(e):
+        print(f"HINT: Try running with sudo: 'sudo ./venv/bin/python pii_guard_demo.py'")
+    print("\n--- FALLING BACK TO MOCK MODE (Simulation) ---")
     ser = None
+
+def mock_redact(text):
+    import re
+    # Simplified simulation of the FPGA patterns
+    patterns = [
+        r'[a-zA-Z0-9.]+@[a-zA-Z0-9.]+\.[a-zA-Z]+', # Email
+        r'\d{10}',                                 # Phone
+        r'\d{3}-\d{2}-\d{4}',                      # SSN
+        r'\d{16}'                                  # CC
+    ]
+    redacted = text
+    for p in patterns:
+        for match in re.finditer(p, redacted):
+            start, end = match.span()
+            redacted = redacted[:start] + 'X' * (end-start) + redacted[end:]
+    return redacted
 
 def stream_text(text):
     print(f"Original Stream: {text}\n")
-    print("Redacted Stream: ", end="", flush=True)
-
+    
     if ser:
+        print("Redacted Stream: ", end="", flush=True)
         ser.reset_input_buffer()
-
-    for char in text:
-        if ser:
+        for char in text:
             ser.write(char.encode())
-            # Use errors='replace' to handle potential noise/uninitialized bytes
             scrubbed = ser.read(1).decode('utf-8', errors='replace')
             print(scrubbed, end="", flush=True)
             time.sleep(0.01) 
-        else:
-            # Mock behavior if FPGA is unplugged
+    else:
+        print("(MOCK) Redacted Stream: ", end="", flush=True)
+        simulated = mock_redact(text)
+        for char in simulated:
             print(char, end="", flush=True)
             time.sleep(0.01)
-
+    
     print("\n\nDone.")
 
 if __name__ == "__main__":
-    demo_text = "Hello! My CC is 4111222233334444 and my SSN is 123-45-6789. Contact user@example.com."
+    demo_text = "Hello! My CC is 4111222233334444 and my SSN is 123-45-6789. Contact user@example.com. Hello! My CC is 4111222233334444 and m SSN is 123-45-6789. Contact user@exam lea com. 4111222233334444 and m SSN is 123-45-6789. Contact user@exam lea com. 4111222233334444 and m SSN is 123-45-6789. Contact user@exam lea com. 4111222233334444 and m SSN is 123-45-6789. Contact user@exam lea com. 4111222233334444 and m SSN is 123-45-6789. Contact user@exam lea com. 4111222233334444 and m SSN is 123-45-6789. Contact user@exam lea com. 4111222233334444 and m SSN is 123-45-6789. Contact user@exam lea com. "
     # Add 128 spaces to flush the FPGA's 128-char delay buffer
     stream_text(demo_text + " " * 128)
 
