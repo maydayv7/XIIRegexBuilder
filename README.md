@@ -12,7 +12,7 @@ The host PC communicates with the FPGA over a standard USB-UART serial link at 1
 
 - **FIX Protocol Parsing**: High-speed filtering of electronic trading messages (orders/fills) to route data before it reaches the software stack.
 - **Market Data Feed Filtering**: Scanning millions of events per second to discard irrelevant instrument data at line-rate, saving CPU cycles.
-- **Trade Surveillance**: Detecting malicious network patterns (e.g., spoofing, wash trading) continuously across live, high-speed data flows.
+- **Trade Surveillance**: Detecting malicious network patterns (Eg., spoofing, wash trading) continuously across live, high-speed data flows.
 
 ## 3. FPGA Relevance
 
@@ -63,17 +63,17 @@ Send `?` at any time to query the current counters without feeding any character
 
 ### Hardware Counters
 
-- `byte_count [31:0]` — total bytes fed into the NFA engine since the last reset.
-- `match_count_k [15:0]` — cumulative match events for regex _k_ (independent counter per regex).
+- `byte_count [31:0]` - total bytes fed into the NFA engine since the last reset.
+- `match_count_k [15:0]` - cumulative match events for regex _k_ (independent counter per regex).
 
 ## 5. System Scope
 
 ### Minimum System (Commitment)
 
-- C++ Verilog Emitter compiling basic literal and concatenation patterns (e.g., abc).
+- C++ Verilog Emitter compiling basic literal and concatenation patterns (Eg., abc).
 - At least one generated Verilog FSM successfully simulated and executing correctly on the FPGA.
 
-### Goal System — **ACHIEVED**
+### Goal System - **ACHIEVED**
 
 - Full compiler support for complex operators (`*`, `+`, `?`, `|`, `.`) via Glushkov's epsilon-free construction.
 - Integration of up to 16 parallel FSM modules passing the C++ golden reference testbenches.
