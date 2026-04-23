@@ -783,22 +783,25 @@ void Emitter::emitResultAssembler(const std::filesystem::path &outputDir, int nu
         << ");\n\n";
 
     out << "    localparam RESULT_SIZE = " << resultSizeBytes << ";\n"
+        << "    localparam RESULT_BITS = RESULT_SIZE * 8;\n"
         << "    localparam MAX_RESULTS = 128;\n\n"
-        << "    reg [7:0] mem [0:32767]; // Buffer for results (32KB)\n"
-        << "    reg [14:0] write_ptr = 0;\n"
-        << "    reg [14:0] read_ptr = 0;\n"
-        << "    reg [14:0] latched_end_ptr = 0;\n"
+        << "    reg [RESULT_BITS-1:0] mem [0:MAX_RESULTS-1];\n"
+        << "    reg [6:0] write_idx = 0;\n"
+        << "    reg [6:0] read_idx = 0;\n"
+        << "    reg [6:0] latched_end_idx = 0;\n"
+        << "    reg [15:0] byte_idx = 0;\n"
         << "    reg [15:0] results_count = 0;\n"
         << "    reg [31:0] active_seq_num;\n"
         << "    reg [15:0] active_num_strings;\n"
-        << "    reg [31:0] active_cycle_stamp;\n\n"
+        << "    reg [31:0] active_cycle_stamp;\n"
+        << "    reg [RESULT_BITS-1:0] current_result;\n\n"
         << "    localparam IDLE = 2'd0, SEND_HEADER = 2'd1, SEND_RESULTS = 2'd2;\n"
         << "    reg [1:0] state = IDLE;\n"
         << "    reg [3:0] header_idx = 0;\n\n"
         << "    always @(posedge clk) begin\n"
         << "        if (rst) begin\n"
         << "            state <= IDLE;\n"
-        << "            write_ptr <= 0;\n"
+        << "            write_idx <= 0;\n"
         << "            results_count <= 0;\n"
         << "            m_axis_tvalid <= 0;\n"
         << "            m_axis_tlast <= 0;\n"
@@ -808,30 +811,32 @@ void Emitter::emitResultAssembler(const std::filesystem::path &outputDir, int nu
         << "                    active_seq_num <= result_seq_num;\n"
         << "                    active_num_strings <= result_num_strings;\n"
         << "                    active_cycle_stamp <= cycle_stamp;\n"
-        << "                    write_ptr <= 0;\n"
+        << "                    write_idx <= 0;\n"
         << "                end\n";
 
-    // Write match bits
+    out << "                mem[write_idx] <= {";
+    bool first = true;
     for (int b = 0; b < matchBitsBytes; ++b) {
+        if (!first) out << ", ";
+        first = false;
         int startBit = b * 8;
         int endBit = std::min((b + 1) * 8 - 1, numRegex - 1);
-        out << "                mem[write_ptr + " << b << "] <= {";
         if (endBit - startBit + 1 < 8) {
             out << (8 - (endBit - startBit + 1)) << "'b0, ";
         }
         for (int i = endBit; i >= startBit; --i) {
             out << "result_match[" << i << "]" << (i > startBit ? ", " : "");
         }
-        out << "};\n";
     }
 
-    // Write hit counts
     for (int i = 0; i < numRegex; ++i) {
-        out << "                mem[write_ptr + " << matchBitsBytes + (i * 2) << "] <= match_count_" << i << "[15:8];\n"
-            << "                mem[write_ptr + " << matchBitsBytes + (i * 2) + 1 << "] <= match_count_" << i << "[7:0];\n";
+        if (!first) out << ", ";
+        first = false;
+        out << "match_count_" << i << "[15:8], match_count_" << i << "[7:0]";
     }
 
-    out << "                write_ptr <= write_ptr + RESULT_SIZE;\n"
+    out << "};\n"
+        << "                write_idx <= write_idx + 1;\n"
         << "                results_count <= results_count + 1;\n"
         << "            end\n\n"
         << "            case (state)\n"
@@ -839,8 +844,8 @@ void Emitter::emitResultAssembler(const std::filesystem::path &outputDir, int nu
         << "                    if (results_count > 0 && results_count == active_num_strings) begin\n"
         << "                        state <= SEND_HEADER;\n"
         << "                        header_idx <= 0;\n"
-        << "                        read_ptr <= 0;\n"
-        << "                        latched_end_ptr <= write_ptr;\n"
+        << "                        read_idx <= 0;\n"
+        << "                        latched_end_idx <= write_idx;\n"
         << "                    end\n"
         << "                end\n"
         << "                SEND_HEADER: begin\n"
@@ -860,20 +865,31 @@ void Emitter::emitResultAssembler(const std::filesystem::path &outputDir, int nu
         << "                    if (m_axis_tready) begin\n"
         << "                        if (header_idx == 9) begin\n"
         << "                            state <= SEND_RESULTS;\n"
+        << "                            byte_idx <= RESULT_SIZE - 1;\n"
+        << "                            current_result <= mem[read_idx];\n"
         << "                        end else header_idx <= header_idx + 1;\n"
         << "                    end\n"
         << "                end\n"
         << "                SEND_RESULTS: begin\n"
         << "                    m_axis_tvalid <= 1;\n"
-        << "                    m_axis_tdata <= mem[read_ptr];\n"
-        << "                    m_axis_tlast <= (read_ptr + 1 == latched_end_ptr);\n"
+        << "                    m_axis_tdata <= current_result[RESULT_BITS-1 -: 8];\n"
+        << "                    m_axis_tlast <= (read_idx + 1 == latched_end_idx) && (byte_idx == 0);\n"
         << "                    if (m_axis_tready) begin\n"
-        << "                        if (read_ptr + 1 == latched_end_ptr) begin\n"
-        << "                            state <= IDLE;\n"
-        << "                            results_count <= 0;\n"
-        << "                            m_axis_tvalid <= 0;\n"
-        << "                            m_axis_tlast <= 0;\n"
-        << "                        end else read_ptr <= read_ptr + 1;\n"
+        << "                        if (byte_idx == 0) begin\n"
+        << "                            if (read_idx + 1 == latched_end_idx) begin\n"
+        << "                                state <= IDLE;\n"
+        << "                                results_count <= 0;\n"
+        << "                                m_axis_tvalid <= 0;\n"
+        << "                                m_axis_tlast <= 0;\n"
+        << "                            end else begin\n"
+        << "                                read_idx <= read_idx + 1;\n"
+        << "                                byte_idx <= RESULT_SIZE - 1;\n"
+        << "                                current_result <= mem[read_idx + 1];\n"
+        << "                            end\n"
+        << "                        end else begin\n"
+        << "                            byte_idx <= byte_idx - 1;\n"
+        << "                            current_result <= current_result << 8;\n"
+        << "                        end\n"
         << "                    end\n"
         << "                end\n"
         << "            endcase\n"
@@ -894,14 +910,14 @@ void Emitter::emitTopFPGA(const std::vector<std::unique_ptr<NFA>> &nfas, const s
     const size_t numNFAs = nfas.size();
     const std::string busHigh = std::to_string(numNFAs > 0 ? numNFAs - 1 : 0);
 
-    out << "`timescale 1ns / 1ps\n\n";
-    out << "// =============================================================================\n"
+    out << "`timescale 1ns / 1ps\n\n"
+        << "// =============================================================================\n"
         << "// top_fpga.v — FPGA Top-Level (Ethernet-based)\n"
         << "// Regex count: " << numNFAs << "\n"
-        << "// =============================================================================\n\n";
-
-    out << "module top_fpga #(\n"
-        << "    parameter TARGET = \"XILINX\"\n"
+        << "// =============================================================================\n\n"
+        << "module top_fpga #(\n"
+        << "    parameter TARGET = \"XILINX\",\n"
+        << "    parameter NUM_REGEX = " << numNFAs << "\n"
         << ")(\n"
         << "    input  wire       clk,\n"
         << "    input  wire       rst_btn,\n\n"
@@ -928,12 +944,22 @@ void Emitter::emitTopFPGA(const std::vector<std::unique_ptr<NFA>> &nfas, const s
 
     out << "    // 50 MHz Clock for Ethernet PHY\n"
         << "    wire clk_50;\n"
-        << "    // In a real design, this would be an MMCM. For simulation/generic, we divide.\n"
         << "    reg eth_refclk_reg = 0;\n"
         << "    always @(posedge clk) eth_refclk_reg <= ~eth_refclk_reg;\n"
-        << "    assign clk_50 = eth_refclk_reg;\n"
-        << "    assign eth_refclk = clk_50;\n\n";
-
+        << "    BUFG clk50_buf (.I(eth_refclk_reg), .O(clk_50));\n"
+        << "    ODDR #(\n"
+        << "        .DDR_CLK_EDGE(\"OPPOSITE_EDGE\"),\n"
+        << "        .INIT(1'b0),\n"
+        << "        .SRTYPE(\"SYNC\")\n"
+        << "    ) oddr_inst (\n"
+        << "        .Q(eth_refclk),\n"
+        << "        .C(clk_50),\n"
+        << "        .CE(1'b1),\n"
+        << "        .D1(1'b1),\n"
+        << "        .D2(1'b0),\n"
+        << "        .R(1'b0),\n"
+        << "        .S(1'b0)\n"
+        << "    );\n\n";
 
     out << "    // PHY Reset\n"
         << "    phy_reset_fsm phy_rst_inst (\n"
@@ -959,11 +985,11 @@ void Emitter::emitTopFPGA(const std::vector<std::unique_ptr<NFA>> &nfas, const s
         << "        .clk(clk), .rst(rst_btn),\n"
         << "        // PHY\n"
         << "        .m_mii_tx_en(eth_txen), .m_mii_txd(eth_txd),\n"
-        << "        .s_mii_rx_clk(eth_refclk), .s_mii_rx_dv(eth_crsdv), .s_mii_rxd(eth_rxd), .s_mii_rx_err(eth_rxerr),\n"
+        << "        .s_mii_rx_clk(clk_50), .s_mii_rx_dv(eth_crsdv), .s_mii_rxd(eth_rxd), .s_mii_rx_err(eth_rxerr),\n"
         << "        // UDP RX\n"
         << "        .m_udp_payload_tdata(rx_udp_payload_tdata), .m_udp_payload_tvalid(rx_udp_payload_tvalid),\n"
         << "        .m_udp_payload_tlast(rx_udp_payload_tlast), .m_udp_payload_tready(rx_udp_payload_tready),\n"
-        << "        .m_udp_port(LOCAL_PORT),\n"
+        << "        .m_udp_port(),\n"
         << "        // UDP TX\n"
         << "        .s_udp_payload_tdata(tx_udp_payload_tdata), .s_udp_payload_tvalid(tx_udp_payload_tvalid),\n"
         << "        .s_udp_payload_tlast(tx_udp_payload_tlast), .s_udp_payload_tready(tx_udp_payload_tready),\n"
@@ -1046,8 +1072,6 @@ void Emitter::emitConstraints(const std::vector<std::unique_ptr<NFA>> &nfas, con
         << "create_clock -add -name sys_clk_pin -period 10.00 -waveform {0 5} [get_ports clk]\n\n";
 
     out << "## USB-RS232 Interface (Nexys A7)\n"
-        << "set_property PACKAGE_PIN C4 [get_ports uart_rx_pin]\n"
-        << "set_property IOSTANDARD LVCMOS33 [get_ports uart_rx_pin]\n\n"
         << "set_property PACKAGE_PIN D4 [get_ports uart_tx_pin]\n"
         << "set_property IOSTANDARD LVCMOS33 [get_ports uart_tx_pin]\n\n";
 
@@ -1058,21 +1082,16 @@ void Emitter::emitConstraints(const std::vector<std::unique_ptr<NFA>> &nfas, con
     out << "## LAN8720A Ethernet PHY (Nexys A7)\n"
         << "set_property PACKAGE_PIN C9  [get_ports eth_mdc]\n"
         << "set_property PACKAGE_PIN A9  [get_ports eth_mdio]\n"
-        << "set_property PACKAGE_PIN D9  [get_ports eth_rstn]\n"
-        << "set_property PACKAGE_PIN B3  [get_ports eth_crsdv]\n"
-        << "set_property PACKAGE_PIN C3  [get_ports eth_rxerr]\n"
-        << "set_property PACKAGE_PIN C10 [get_ports {eth_rxd[0]}]\n"
-        << "set_property PACKAGE_PIN C11 [get_ports {eth_rxd[1]}]\n"
-        << "set_property PACKAGE_PIN D10 [get_ports eth_txen]\n"
+        << "set_property PACKAGE_PIN B3  [get_ports eth_rstn]\n"
+        << "set_property PACKAGE_PIN D9  [get_ports eth_crsdv]\n"
+        << "set_property PACKAGE_PIN C10 [get_ports eth_rxerr]\n"
+        << "set_property PACKAGE_PIN C11 [get_ports {eth_rxd[0]}]\n"
+        << "set_property PACKAGE_PIN D10 [get_ports {eth_rxd[1]}]\n"
+        << "set_property PACKAGE_PIN B9  [get_ports eth_txen]\n"
         << "set_property PACKAGE_PIN A10 [get_ports {eth_txd[0]}]\n"
         << "set_property PACKAGE_PIN A8  [get_ports {eth_txd[1]}]\n"
-        << "set_property PACKAGE_PIN D11 [get_ports eth_refclk]\n\n"
-        << "set_property IOSTANDARD LVCMOS33 [get_ports {eth_mdc eth_mdio eth_rstn eth_crsdv eth_rxerr eth_rxd eth_txen eth_txd eth_refclk}]\n\n"
-        << "## Ethernet clock constraints\n"
-        << "create_clock -period 40.0 -name eth_rx_clk [get_ports eth_crsdv]\n"
-        << "set_clock_groups -asynchronous -group [get_clocks sys_clk_pin] -group [get_clocks eth_rx_clk]\n"
-        << "set_false_path -from [get_clocks eth_rx_clk] -to [get_clocks sys_clk_pin]\n"
-        << "set_false_path -from [get_clocks sys_clk_pin] -to [get_clocks eth_rx_clk]\n\n";
+        << "set_property PACKAGE_PIN D5  [get_ports eth_refclk]\n\n"
+        << "set_property IOSTANDARD LVCMOS33 [get_ports {eth_mdc eth_mdio eth_rstn eth_crsdv eth_rxerr eth_rxd eth_txen eth_txd eth_refclk}]\n\n";
 
     out << "## LEDs (Nexys A7 LED0 to LED15)\n";
     std::vector<std::string> led_pins = {

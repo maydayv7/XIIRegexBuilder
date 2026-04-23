@@ -11,9 +11,16 @@ create_project -in_memory -part $part
 
 # 3. Read Verilog files
 # Core Library & Helpers
-read_verilog [glob lib/verilog-ethernet/rtl/*.v]
+set eth_rtl [glob lib/verilog-ethernet/rtl/*.v]
+foreach f $eth_rtl {
+    if {![string match "*ssio_sdr_in_diff.v" $f]} {
+        read_verilog $f
+    }
+}
+read_verilog [glob lib/verilog-ethernet/lib/axis/rtl/*.v]
 read_verilog lib/extra_rtl/phy_reset_fsm.v
 read_verilog lib/extra_rtl/cycle_counter.v
+read_verilog lib/extra_rtl/rmii_phy_if.v
 read_verilog lib/extra_rtl/xiir_eth_stack.v
 
 # Generated Files
@@ -32,7 +39,7 @@ synth_design -top top_fpga -part $part
 
 # Add generated clock for ETH PHY (50 MHz)
 # Assumes 100MHz 'clk' is divided by 2 inside top_fpga.v
-create_generated_clock -name eth_refclk -source [get_ports clk] -divide_by 2 [get_pins eth_refclk_reg/Q]
+create_generated_clock -name eth_refclk -source [get_ports clk] -divide_by 2 [get_pins eth_refclk_reg_reg/Q]
 
 # 6. Run Implementation Flow
 opt_design
