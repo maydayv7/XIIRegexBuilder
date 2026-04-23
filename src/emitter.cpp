@@ -530,34 +530,41 @@ void Emitter::emitTopFPGA(const std::vector<std::unique_ptr<NFA>> &nfas, const s
     localparam DELAY_LEN = 32;
     reg [7:0] delay_bram [0:DELAY_LEN-1];
     reg [4:0] delay_ptr = 0;
-    
-    reg [DELAY_LEN-1:0] active_history = 0;
     reg [DELAY_LEN-1:0] commit_history = 0;
 
+    // Per-NFA Active Histories to isolate redaction contexts
+)";
+    for (size_t i = 0; i < numNFAs; ++i) {
+        out << "    reg [DELAY_LEN-1:0] active_history_" << i << " = 0;\n";
+    }
+
+    out << R"(
     // Power-On-Reset Initialization
     reg [7:0] por_count = 0;
     wire por_rst = (por_count < 8'hFF);
-    integer m;
-    initial for (m=0; m<DELAY_LEN; m=m+1) delay_bram[m] = 8'h20;
 
-    wire any_active = |active_bus;
-    wire any_match = |match_bus;
-    
     reg rx_ready_prev = 0;
     reg [1:0] step = 0;
     reg [7:0] rx_latch = 0;
 
     always @(posedge clk) begin
         if (rst_btn || por_rst) begin
-            if (por_count < 8'hFF) por_count <= por_count + 1;
+            if (por_count < 8'hFF) begin
+                delay_bram[por_count[4:0]] <= 8'h20; // Initialize BRAM sequentially
+                por_count <= por_count + 1;
+            end
             nfa_en <= 0;
             nfa_start <= 1;
             tx_start <= 0;
             rx_ready_prev <= 0;
             delay_ptr <= 0;
-            active_history <= 0;
             commit_history <= 0;
             step <= 0;
+)";
+    for (size_t i = 0; i < numNFAs; ++i) {
+        out << "            active_history_" << i << " <= 0;\n";
+    }
+    out << R"(
         end else begin
             nfa_start <= 0;
             nfa_en <= 0;
@@ -587,14 +594,19 @@ void Emitter::emitTopFPGA(const std::vector<std::unique_ptr<NFA>> &nfas, const s
                     delay_bram[delay_ptr] <= rx_latch;
                     delay_ptr <= delay_ptr + 1;
 
-                    // 3. Update History
-                    active_history <= {active_history[DELAY_LEN-2:0], any_active};
-                    if (any_match) begin
-                        commit_history <= ({commit_history[DELAY_LEN-2:0], 1'b0} | {active_history[DELAY_LEN-2:0], 1'b1});
-                    end else begin
-                        commit_history <= {commit_history[DELAY_LEN-2:0], 1'b0};
-                    end
-                    
+                    // 3. Update Histories
+)";
+    for (size_t i = 0; i < numNFAs; ++i) {
+        out << "                    active_history_" << i << " <= {active_history_" << i << "[DELAY_LEN-2:0], active_bus[" << i << "]};\n";
+    }
+
+    out << "                    commit_history <= {commit_history[DELAY_LEN-2:0], 1'b0}";
+    for (size_t i = 0; i < numNFAs; ++i) {
+        out << "\n                                      | (match_bus[" << i << "] ? {active_history_" << i << "[DELAY_LEN-2:0], 1'b1} : 32'd0)";
+    }
+    out << ";\n";
+
+    out << R"(
                     step <= 0;
                 end
             endcase
