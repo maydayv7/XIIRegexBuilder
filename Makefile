@@ -76,3 +76,8 @@ clean:
 	rm -rf xsim.dir .Xil
 
 .PHONY: all run test golden clean
+
+# Simulation target
+sim:
+	iverilog -o sim_out output/*.v
+	vvp sim_out

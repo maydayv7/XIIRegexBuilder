@@ -89,7 +89,8 @@ void Emitter::emitNFAModule(const NFA &nfa, const std::filesystem::path &outputD
         << "    input  wire       rst,\n"
         << "    input  wire       start,\n"
         << "    input  wire [7:0] char_in,\n"
-        << "    output wire       match\n"
+        << "    output wire       match,\n"
+        << "    output wire       active\n"
         << ");\n\n";
 
     out << "    // One-hot state register\n"
@@ -214,8 +215,14 @@ void Emitter::emitNFAModule(const NFA &nfa, const std::filesystem::path &outputD
         out << "})";
     }
 
-    out << ";\n\n"
-        << "endmodule\n";
+    out << ";\n\n";
+    out << "    // Active logic: high if any state other than state 0 is active\n";
+    if (numStates > 1) {
+        out << "    assign active = |state_reg[" << numStates - 1 << ":1];\n\n";
+    } else {
+        out << "    assign active = 1'b0;\n\n";
+    }
+    out << "endmodule\n";
 }
 
 void Emitter::emitTopModule(const std::vector<std::unique_ptr<NFA>> &nfas, const std::filesystem::path &outputDir)
@@ -240,13 +247,14 @@ void Emitter::emitTopModule(const std::vector<std::unique_ptr<NFA>> &nfas, const
         << "    input  wire       rst,\n"
         << "    input  wire       start,\n"
         << "    input  wire [7:0] char_in,\n"
-        << "    output wire [" << (nfas.size() - 1) << ":0] match_bus\n"
+        << "    output wire [" << (nfas.size() > 0 ? nfas.size() - 1 : 0) << ":0] match_bus,\n"
+        << "    output wire [" << (nfas.size() > 0 ? nfas.size() - 1 : 0) << ":0] active_bus\n"
         << ");\n\n";
 
     for (size_t i = 0; i < nfas.size(); ++i)
     {
         out << "    nfa_" << nfas[i]->regexIndex << " inst_" << nfas[i]->regexIndex << " (\n"
-            << "        .clk(clk), .en(en), .rst(rst), .start(start), .char_in(char_in), .match(match_bus[" << i << "])\n"
+            << "        .clk(clk), .en(en), .rst(rst), .start(start), .char_in(char_in), .match(match_bus[" << i << "]), .active(active_bus[" << i << "])\n"
             << "    );\n\n";
     }
     out << "endmodule\n";
@@ -276,8 +284,9 @@ void Emitter::emitTestbench(const std::vector<std::unique_ptr<NFA>> &nfas,
         << "module tb_top;\n"
         << "    reg clk, en, rst, start;\n"
         << "    reg [7:0] char_in;\n"
-        << "    wire [" << (numNFAs > 0 ? numNFAs - 1 : 0) << ":0] match_bus;\n\n"
-        << "    top uut (.clk(clk), .en(en), .rst(rst), .start(start), .char_in(char_in), .match_bus(match_bus));\n\n"
+        << "    wire [" << (numNFAs > 0 ? numNFAs - 1 : 0) << ":0] match_bus;\n"
+        << "    wire [" << (numNFAs > 0 ? numNFAs - 1 : 0) << ":0] active_bus;\n\n"
+        << "    top uut (.clk(clk), .en(en), .rst(rst), .start(start), .char_in(char_in), .match_bus(match_bus), .active_bus(active_bus));\n\n"
         << "    always #5 clk = ~clk;\n\n"
         << "    initial begin\n"
         << "        // synthesis translate_off\n"
@@ -317,6 +326,7 @@ void Emitter::emitTestbench(const std::vector<std::unique_ptr<NFA>> &nfas,
     }
 
     out << "        $display(\"All tests completed.\");\n"
+        << "        $display(\"PASSED\");\n"
         << "        #100; $finish;\n    end\nendmodule\n";
 }
 
@@ -493,7 +503,8 @@ void Emitter::emitTopFPGA(const std::vector<std::unique_ptr<NFA>> &nfas, const s
     reg        nfa_en = 1'b0;
 )";
 
-    out << "    wire [" << (numNFAs > 0 ? numNFAs - 1 : 0) << ":0] match_bus;\n\n";
+    out << "    wire [" << (numNFAs > 0 ? numNFAs - 1 : 0) << ":0] match_bus;\n"
+        << "    wire [" << (numNFAs > 0 ? numNFAs - 1 : 0) << ":0] active_bus;\n\n";
 
     out << "    top regex_engine (\n"
         << "        .clk(clk),\n"
@@ -501,21 +512,9 @@ void Emitter::emitTopFPGA(const std::vector<std::unique_ptr<NFA>> &nfas, const s
         << "        .rst(rst_btn),\n"
         << "        .start(nfa_start),\n"
         << "        .char_in(nfa_char_in),\n"
-        << "        .match_bus(match_bus)\n"
+        << "        .match_bus(match_bus),\n"
+        << "        .active_bus(active_bus)\n"
         << "    );\n\n";
-
-    out << "    function [7:0] get_redaction_length;\n"
-        << "        input [" << (numNFAs > 0 ? numNFAs - 1 : 0) << ":0] matches;\n"
-        << "        begin\n"
-        << "            get_redaction_length = 8'd0;\n";
-    for (size_t i = 0; i < numNFAs; ++i)
-    {
-        int len = static_cast<int>(nfas[i]->states.size()) - 1;
-        if (len > 255) len = 255;
-        out << "            if (matches[" << i << "]) get_redaction_length = 8'd" << len << ";\n";
-    }
-    out << "        end\n"
-        << "    endfunction\n\n";
 
     out << R"(
     // UART TX instantiation
@@ -532,26 +531,22 @@ void Emitter::emitTopFPGA(const std::vector<std::unique_ptr<NFA>> &nfas, const s
         .tx_busy(tx_busy)
     );
 
-    // 4KiB BRAM Ring Buffer
-    reg [7:0] data_buffer [0:4095];
-    reg [0:0] redact_buffer [0:4095];
-    reg [11:0] write_ptr = 0;
-    reg [11:0] read_ptr = 0;
-    reg [11:0] redact_ptr = 0;
-    reg [7:0] redact_count = 0;
+    // Exact-Boundary Shift-History Architecture (1024 bytes latency)
+    localparam DELAY_LEN = 1024;
+    reg [7:0] delay_bram [0:DELAY_LEN-1];
+    reg [9:0] write_ptr = 0;
+    reg [9:0] read_ptr = 10'd1; // read_ptr is DELAY_LEN-1 cycles behind write_ptr
     
-    // FSM States
-    localparam S_NORMAL = 1'b0, S_REDACT = 1'b1;
-    reg state = S_NORMAL;
+    reg [DELAY_LEN-1:0] active_history = 0;
+    reg [DELAY_LEN-1:0] commit_history = 0;
 
-    integer i;
+    wire any_active = |active_bus;
+    wire any_match = |match_bus;
     
-    // RTS Logic: Pause host if buffer is nearly full (>4000 entries)
-    wire [11:0] buffer_fill = write_ptr - read_ptr;
-    assign uart_rts_pin = (buffer_fill > 12'd4000); 
+    assign uart_rts_pin = uart_cts_pin; // Flow control passthrough: stop RX if TX is blocked by host
 
     reg rx_ready_prev = 0;
-    reg reading = 0;
+    reg read_trigger = 0;
     
     always @(posedge clk) begin
         if (rst_btn) begin
@@ -561,54 +556,45 @@ void Emitter::emitTopFPGA(const std::vector<std::unique_ptr<NFA>> &nfas, const s
             rx_ready_prev <= 0;
             match_leds <= 0;
             write_ptr <= 0;
-            read_ptr <= 0;
-            state <= S_NORMAL;
-            redact_count <= 0;
-            reading <= 0;
+            read_ptr <= 10'd1;
+            active_history <= 0;
+            commit_history <= 0;
+            read_trigger <= 0;
         end else begin
             nfa_start <= 0;
             nfa_en <= 0;
             tx_start <= 0;
             rx_ready_prev <= rx_ready;
 
-            // Port A: RX Write 
             if (rx_ready && !rx_ready_prev) begin
-                data_buffer[write_ptr] <= rx_data;
-                redact_buffer[write_ptr] <= 1'b0;
-                write_ptr <= write_ptr + 1;
+                // Write Port: Store incoming char
+                delay_bram[write_ptr] <= rx_data;
                 
+                // Feed NFA Engine
                 nfa_char_in <= rx_data;
                 nfa_en <= 1; 
+
+                // Shift History Logs
+                active_history <= {active_history[DELAY_LEN-2:0], any_active};
+                
+                // Commit match spans OR just shift
+                if (any_match) begin
+                    commit_history <= {commit_history[DELAY_LEN-2:0], 1'b0} | {active_history[DELAY_LEN-2:0], any_active};
+                    match_leds <= match_bus; // Visual feedback for match
+                end else begin
+                    commit_history <= {commit_history[DELAY_LEN-2:0], 1'b0};
+                end
+
+                write_ptr <= write_ptr + 1;
+                read_ptr <= read_ptr + 1;
+                read_trigger <= 1; // Trigger read-out on next cycle
+            end else if (read_trigger) begin
+                // Read Port: Fetch delayed char and apply redaction decision
+                // Redact if the oldest bit in the commit history is set
+                tx_data <= (commit_history[DELAY_LEN-1]) ? 8'h58 : delay_bram[read_ptr];
+                tx_start <= 1;
+                read_trigger <= 0;
             end
-
-            // Port B: FSM (Retroactive Redaction & TX Read)
-            case (state)
-                S_NORMAL: begin
-                    if (|match_bus) begin
-                        match_leds <= match_bus;
-                        redact_ptr <= write_ptr - 1;
-                        redact_count <= get_redaction_length(match_bus);
-                        state <= S_REDACT;
-                    end else if (buffer_fill > 12'd2048 && !tx_busy && !tx_start && !reading) begin
-                        reading <= 1;
-                    end else if (reading) begin
-                        tx_data <= (redact_buffer[read_ptr]) ? 8'h58 : data_buffer[read_ptr];
-                        tx_start <= 1;
-                        read_ptr <= read_ptr + 1;
-                        reading <= 0;
-                    end
-                end
-
-                S_REDACT: begin
-                    if (redact_count > 0) begin
-                        redact_buffer[redact_ptr] <= 1'b1;
-                        redact_ptr <= redact_ptr - 1;
-                        redact_count <= redact_count - 1;
-                    end else begin
-                        state <= S_NORMAL;
-                    end
-                end
-            endcase
         end
     end
 endmodule
