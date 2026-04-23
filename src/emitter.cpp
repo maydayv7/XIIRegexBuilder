@@ -480,10 +480,7 @@ void Emitter::emitTopFPGA(const std::vector<std::unique_ptr<NFA>> &nfas, const s
         << "    input  wire clk,        // 100 MHz system clock\n"
         << "    input  wire rst_btn,    // Physical reset button\n"
         << "    input  wire uart_rx_pin,// USB UART RX pin\n"
-        << "    output wire uart_tx_pin,// USB UART TX pin\n"
-        << "    input  wire uart_cts_pin,// UART CTS pin (input to FPGA)\n"
-        << "    output wire uart_rts_pin,// UART RTS pin (output from FPGA)\n"
-        << "    output reg  [" << (numNFAs > 0 ? numNFAs - 1 : 0) << ":0] match_leds // LEDs for match output\n"
+        << "    output wire uart_tx_pin // USB UART TX pin\n"
         << ");\n\n";
 
     out << R"(
@@ -529,72 +526,78 @@ void Emitter::emitTopFPGA(const std::vector<std::unique_ptr<NFA>> &nfas, const s
         .tx_busy(tx_busy)
     );
 
-    // Exact-Boundary Shift-History Architecture (32 bytes latency)
+    // 32-Byte Latency Buffering with Sequencing
     localparam DELAY_LEN = 32;
     reg [7:0] delay_bram [0:DELAY_LEN-1];
-    reg [4:0] write_ptr = 0;
-    reg [4:0] read_ptr = 5'd1; // read_ptr is DELAY_LEN-1 cycles behind write_ptr
+    reg [4:0] delay_ptr = 0;
     
     reg [DELAY_LEN-1:0] active_history = 0;
     reg [DELAY_LEN-1:0] commit_history = 0;
 
+    // Power-On-Reset Initialization
+    reg [7:0] por_count = 0;
+    wire por_rst = (por_count < 8'hFF);
+    integer m;
+    initial for (m=0; m<DELAY_LEN; m=m+1) delay_bram[m] = 8'h20;
+
     wire any_active = |active_bus;
     wire any_match = |match_bus;
     
-    assign uart_rts_pin = 1'b0; // Always ready
-
     reg rx_ready_prev = 0;
-    reg tx_pending = 0;
-    integer k;
+    reg [1:0] step = 0;
+    reg [7:0] rx_latch = 0;
 
     always @(posedge clk) begin
-        if (rst_btn) begin
+        if (rst_btn || por_rst) begin
+            if (por_count < 8'hFF) por_count <= por_count + 1;
             nfa_en <= 0;
             nfa_start <= 1;
             tx_start <= 0;
             rx_ready_prev <= 0;
-            match_leds <= 0;
-            write_ptr <= 0;
-            read_ptr <= 5'd1;
+            delay_ptr <= 0;
             active_history <= 0;
             commit_history <= 0;
-            tx_pending <= 0;
-            for (k=0; k<DELAY_LEN; k=k+1) delay_bram[k] <= 8'h20; 
+            step <= 0;
         end else begin
             nfa_start <= 0;
             nfa_en <= 0;
+            tx_start <= 0;
             rx_ready_prev <= rx_ready;
 
+            // Character Processing Sequence
             if (rx_ready && !rx_ready_prev) begin
-                delay_bram[write_ptr] <= rx_data;
-                nfa_char_in <= rx_data;
-                nfa_en <= 1; 
-
-                active_history <= {active_history[DELAY_LEN-2:0], any_active};
-                
-                if (any_match) begin
-                    commit_history <= {commit_history[DELAY_LEN-2:0], 1'b0} | {active_history[DELAY_LEN-2:0], any_active};
-                    match_leds <= match_bus; 
-                end else begin
-                    commit_history <= {commit_history[DELAY_LEN-2:0], 1'b0};
-                end
-
-                write_ptr <= write_ptr + 1;
-                read_ptr <= read_ptr + 1;
-                tx_pending <= 1; 
+                rx_latch <= rx_data;
+                step <= 1;
             end
 
-            if (tx_pending) begin
-                if (!tx_busy && !tx_start) begin
-                    tx_data <= (commit_history[DELAY_LEN-1]) ? 8'h58 : delay_bram[read_ptr];
+            case (step)
+                1: begin
+                    // Step 1: Feed NFA Engine
+                    nfa_char_in <= rx_latch;
+                    nfa_en <= 1;
+                    step <= 2;
+                end
+                2: begin
+                    // Step 2: NFA Match is now valid for rx_latch
+                    // 1. Read delayed char and check redaction bit
+                    tx_data <= (commit_history[DELAY_LEN-1]) ? 8'h58 : delay_bram[delay_ptr];
                     tx_start <= 1;
-                end else if (tx_busy) begin
-                    tx_start <= 0;
-                    tx_pending <= 0;
+
+                    // 2. Overwrite slot with new character
+                    delay_bram[delay_ptr] <= rx_latch;
+                    delay_ptr <= delay_ptr + 1;
+
+                    // 3. Update History
+                    active_history <= {active_history[DELAY_LEN-2:0], any_active};
+                    if (any_match) begin
+                        commit_history <= ({commit_history[DELAY_LEN-2:0], 1'b0} | {active_history[DELAY_LEN-2:0], 1'b1});
+                    end else begin
+                        commit_history <= {commit_history[DELAY_LEN-2:0], 1'b0};
+                    end
+                    
+                    step <= 0;
                 end
-            end else begin
-                tx_start <= 0;
-            end
+            endcase
         end
     end
 endmodule
@@ -616,11 +619,7 @@ void Emitter::emitConstraints(const std::vector<std::unique_ptr<NFA>> &nfas, con
         << "set_property PACKAGE_PIN C4 [get_ports uart_rx_pin]\n"
         << "set_property IOSTANDARD LVCMOS33 [get_ports uart_rx_pin]\n"
         << "set_property PACKAGE_PIN D4 [get_ports uart_tx_pin]\n"
-        << "set_property IOSTANDARD LVCMOS33 [get_ports uart_tx_pin]\n"
-        << "set_property PACKAGE_PIN C17 [get_ports uart_rts_pin]\n"
-        << "set_property IOSTANDARD LVCMOS33 [get_ports uart_rts_pin]\n"
-        << "set_property PACKAGE_PIN D18 [get_ports uart_cts_pin]\n"
-        << "set_property IOSTANDARD LVCMOS33 [get_ports uart_cts_pin]\n\n";
+        << "set_property IOSTANDARD LVCMOS33 [get_ports uart_tx_pin]\n\n";
 
     out << "## Buttons (Nexys A7 Center Button - BTNC)\n"
         << "set_property PACKAGE_PIN N17 [get_ports rst_btn]\n"
