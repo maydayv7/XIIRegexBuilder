@@ -507,3 +507,154 @@ module tb_top;
         char_in = 8'h6e; #10;
         char_in = 8'h64; #10;
         end_of_str = 1; #10;
+        // Match output is valid on the cycle immediately following end_of_str assertion
+        if (match_bus === 7'b0000000) begin
+            $display("PASS: Test case 32 ('the end') matches expected mask 0000000");
+        end else begin
+            $display("FAIL: Test case 32 ('the end') expected 0000000, got %b", match_bus);
+        end
+        end_of_str = 0; #10;
+
+        // Test case 33: "end"
+        start = 1; #10 start = 0;
+        char_in = 8'h65; #10;
+        char_in = 8'h6e; #10;
+        char_in = 8'h64; #10;
+        end_of_str = 1; #10;
+        // Match output is valid on the cycle immediately following end_of_str assertion
+        if (match_bus === 7'b0000000) begin
+            $display("PASS: Test case 33 ('end') matches expected mask 0000000");
+        end else begin
+            $display("FAIL: Test case 33 ('end') expected 0000000, got %b", match_bus);
+        end
+        end_of_str = 0; #10;
+
+        // Test case 34: "xay"
+        start = 1; #10 start = 0;
+        char_in = 8'h78; #10;
+        char_in = 8'h61; #10;
+        char_in = 8'h79; #10;
+        end_of_str = 1; #10;
+        // Match output is valid on the cycle immediately following end_of_str assertion
+        if (match_bus === 7'b0000000) begin
+            $display("PASS: Test case 34 ('xay') matches expected mask 0000000");
+        end else begin
+            $display("FAIL: Test case 34 ('xay') expected 0000000, got %b", match_bus);
+        end
+        end_of_str = 0; #10;
+
+        // Test case 35: "xayxby"
+        start = 1; #10 start = 0;
+        char_in = 8'h78; #10;
+        char_in = 8'h61; #10;
+        char_in = 8'h79; #10;
+        char_in = 8'h78; #10;
+        char_in = 8'h62; #10;
+        char_in = 8'h79; #10;
+        end_of_str = 1; #10;
+        // Match output is valid on the cycle immediately following end_of_str assertion
+        if (match_bus === 7'b0000000) begin
+            $display("PASS: Test case 35 ('xayxby') matches expected mask 0000000");
+        end else begin
+            $display("FAIL: Test case 35 ('xayxby') expected 0000000, got %b", match_bus);
+        end
+        end_of_str = 0; #10;
+
+        // Test case 36: "xy"
+        start = 1; #10 start = 0;
+        char_in = 8'h78; #10;
+        char_in = 8'h79; #10;
+        end_of_str = 1; #10;
+        // Match output is valid on the cycle immediately following end_of_str assertion
+        if (match_bus === 7'b0000000) begin
+            $display("PASS: Test case 36 ('xy') matches expected mask 0000000");
+        end else begin
+            $display("FAIL: Test case 36 ('xy') expected 0000000, got %b", match_bus);
+        end
+        end_of_str = 0; #10;
+
+        // Test case 37: "ac"
+        start = 1; #10 start = 0;
+        char_in = 8'h61; #10;
+        char_in = 8'h63; #10;
+        end_of_str = 1; #10;
+        // Match output is valid on the cycle immediately following end_of_str assertion
+        if (match_bus === 7'b0000000) begin
+            $display("PASS: Test case 37 ('ac') matches expected mask 0000000");
+        end else begin
+            $display("FAIL: Test case 37 ('ac') expected 0000000, got %b", match_bus);
+        end
+        end_of_str = 0; #10;
+
+        // Test case 38: "bd"
+        start = 1; #10 start = 0;
+        char_in = 8'h62; #10;
+        char_in = 8'h64; #10;
+        end_of_str = 1; #10;
+        // Match output is valid on the cycle immediately following end_of_str assertion
+        if (match_bus === 7'b0000000) begin
+            $display("PASS: Test case 38 ('bd') matches expected mask 0000000");
+        end else begin
+            $display("FAIL: Test case 38 ('bd') expected 0000000, got %b", match_bus);
+        end
+        end_of_str = 0; #10;
+
+        // Test case 39: "bc"
+        start = 1; #10 start = 0;
+        char_in = 8'h62; #10;
+        char_in = 8'h63; #10;
+        end_of_str = 1; #10;
+        // Match output is valid on the cycle immediately following end_of_str assertion
+        if (match_bus === 7'b0000000) begin
+            $display("PASS: Test case 39 ('bc') matches expected mask 0000000");
+        end else begin
+            $display("FAIL: Test case 39 ('bc') expected 0000000, got %b", match_bus);
+        end
+        end_of_str = 0; #10;
+
+        // Test case 40: "1234"
+        start = 1; #10 start = 0;
+        char_in = 8'h31; #10;
+        char_in = 8'h32; #10;
+        char_in = 8'h33; #10;
+        char_in = 8'h34; #10;
+        end_of_str = 1; #10;
+        // Match output is valid on the cycle immediately following end_of_str assertion
+        if (match_bus === 7'b0000000) begin
+            $display("PASS: Test case 40 ('1234') matches expected mask 0000000");
+        end else begin
+            $display("FAIL: Test case 40 ('1234') expected 0000000, got %b", match_bus);
+        end
+        end_of_str = 0; #10;
+
+        // Test case 41: "14"
+        start = 1; #10 start = 0;
+        char_in = 8'h31; #10;
+        char_in = 8'h34; #10;
+        end_of_str = 1; #10;
+        // Match output is valid on the cycle immediately following end_of_str assertion
+        if (match_bus === 7'b0000000) begin
+            $display("PASS: Test case 41 ('14') matches expected mask 0000000");
+        end else begin
+            $display("FAIL: Test case 41 ('14') expected 0000000, got %b", match_bus);
+        end
+        end_of_str = 0; #10;
+
+        // Test case 42: "124"
+        start = 1; #10 start = 0;
+        char_in = 8'h31; #10;
+        char_in = 8'h32; #10;
+        char_in = 8'h34; #10;
+        end_of_str = 1; #10;
+        // Match output is valid on the cycle immediately following end_of_str assertion
+        if (match_bus === 7'b0000000) begin
+            $display("PASS: Test case 42 ('124') matches expected mask 0000000");
+        end else begin
+            $display("FAIL: Test case 42 ('124') expected 0000000, got %b", match_bus);
+        end
+        end_of_str = 0; #10;
+
+        $display("All tests completed.");
+        #100; $finish;
+    end
+endmodule
