@@ -43,6 +43,10 @@ private:
     // Circular FIFO buffer between uart_rx and the NFA engine
     static void emitFIFO(const std::filesystem::path &outputDir);
 
+    // Ethernet control modules
+    static void emitPacketParserFSM(const std::filesystem::path &outputDir, int numRegex);
+    static void emitResultAssembler(const std::filesystem::path &outputDir, int numRegex);
+
     // Top FPGA module
     static void emitTopFPGA(const std::vector<std::unique_ptr<NFA>> &nfas, const std::filesystem::path &outputDir);
 

@@ -122,6 +122,16 @@ proc_synth: proc_asm | $(PROC_BUILD_DIR)
 proc_program:
 	$(MAKE) program BITSTREAM=$(PROC_BUILD_DIR)/top_fpga.bit
 
+# Benchmark Targets
+benchmark: $(GOLDEN)
+	@echo "Generating large test data..."
+	python3 benchmarks/generate_large_data.py
+	@echo "Generating golden matches for verification..."
+	$(call MKDIR,$(OUTPUT_DIR))
+	./$(GOLDEN) $(INPUT_DIR)/regexes.txt inputs/large_test_strings.txt $(OUTPUT_DIR)/expected_matches.txt
+	@echo "Running performance comparison..."
+	./benchmarks/run_all.sh
+
 clean:
 	-$(RM) $(call FIX_PATH,src/*.o)
 	-$(RMDIR) $(call FIX_PATH,$(BUILD_DIR))

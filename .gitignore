@@ -40,6 +40,8 @@
 # Debug information
 *.dwo
 output/
+output-bench/
+output-eth-test/
 
 # Final Executable
 build/

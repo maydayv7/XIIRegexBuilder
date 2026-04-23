@@ -6,6 +6,12 @@ g++ -Wall -Wextra -std=c++17 -Isrc -o benchmarks/bench_cpp benchmarks/bench_cpp.
 
 LARGE_TEST="inputs/large_test_strings.txt"
 REGEX_FILE="inputs/regexes.txt"
+
+if [ ! -f "$LARGE_TEST" ]; then
+    echo "Large test file not found. Generating..."
+    python3 benchmarks/generate_large_data.py
+fi
+
 NUM_REGEX=$(grep -v "^#" "$REGEX_FILE" | grep -v "^$" | wc -l | tr -d ' ')
 
 echo "===================================================="
@@ -23,7 +29,7 @@ echo ""
 ./benchmarks/bench_cpp "$REGEX_FILE" "$LARGE_TEST"
 echo ""
 
-# 3. Hardware Timing Logic
+# 3. Hardware Timing Analysis
 TOTAL_CHARS=0
 TOTAL_STRINGS=0
 while IFS= read -r line || [ -n "$line" ]; do
@@ -50,6 +56,28 @@ echo "  [INTERNAL] Theoretical Match Time: $HW_TIME_MS milliseconds"
 echo "  [EXTERNAL] Est. UART Transmission: $UART_TIME_SEC seconds (@ 115200)"
 echo ""
 
+echo "===================================================="
+echo "                  Correctness Check                 "
+echo "===================================================="
+
+# Check Python matches
+diff output/expected_matches.txt python_matches.txt > /dev/null
+if [ $? -eq 0 ]; then
+    echo "Python vs Golden:  MATCH ✅"
+else
+    echo "Python vs Golden:  MISMATCH ❌"
+    echo "  (Note: Differences might be due to std::regex vs re.fullmatch edge cases)"
+fi
+
+# Check C++ matches
+diff output/expected_matches.txt cpp_matches.txt > /dev/null
+if [ $? -eq 0 ]; then
+    echo "C++ vs Golden:     MATCH ✅"
+else
+    echo "C++ vs Golden:     MISMATCH ❌"
+fi
+
+echo ""
 echo "===================================================="
 echo "               Ready for FPGA Connection           "
 echo "===================================================="

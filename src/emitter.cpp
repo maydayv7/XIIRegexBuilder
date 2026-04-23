@@ -42,6 +42,11 @@ void Emitter::emit(const std::vector<std::unique_ptr<NFA>> &nfas,
     emitUARTRX(outputDir);        // uart_rx.v
     emitUARTTX(outputDir);        // uart_tx.v
     emitFIFO(outputDir);          // uart_rx_fifo.v
+    
+    // New Ethernet modules
+    emitPacketParserFSM(outputDir, static_cast<int>(nfas.size()));
+    emitResultAssembler(outputDir, static_cast<int>(nfas.size()));
+
     emitTopFPGA(nfas, outputDir); // top_fpga.v
     emitConstraints(nfas, outputDir);
     emitTestbench(nfas, outputDir, testStrings, expectedMatches);
@@ -562,6 +567,320 @@ endmodule
 }
 
 // =============================================================================
+// emitPacketParserFSM - packet_parser_fsm.v
+// =============================================================================
+void Emitter::emitPacketParserFSM(const std::filesystem::path &outputDir, int numRegex)
+{
+    auto filePath = outputDir / "packet_parser_fsm.v";
+    std::ofstream out(filePath);
+    out.exceptions(std::ofstream::failbit | std::ofstream::badbit);
+
+    out << "`timescale 1ns / 1ps\n\n";
+    out << "module packet_parser_fsm #(\n"
+        << "    parameter NUM_REGEX = " << numRegex << "\n"
+        << ")(\n"
+        << "    input  wire        clk,\n"
+        << "    input  wire        rst,\n\n"
+        << "    // UDP payload input (AXI-Stream from udp_rx)\n"
+        << "    input  wire [7:0]  udp_payload_tdata,\n"
+        << "    input  wire        udp_payload_tvalid,\n"
+        << "    input  wire        udp_payload_tlast,\n"
+        << "    output reg         udp_payload_tready,\n\n"
+        << "    // NFA engine interface\n"
+        << "    output reg         nfa_en,\n"
+        << "    output reg         nfa_rst,\n"
+        << "    output reg         nfa_start,\n"
+        << "    output reg         nfa_end_of_str,\n"
+        << "    output reg  [7:0]  nfa_char_in,\n\n"
+        << "    // Result capture interface\n"
+        << "    input  wire [NUM_REGEX-1:0]        match_bus,\n"
+        << "    output reg                         result_valid,\n"
+        << "    output reg  [NUM_REGEX-1:0]        result_match,\n"
+        << "    output reg  [31:0]                 result_seq_num,\n"
+        << "    output reg  [15:0]                 result_num_strings\n"
+        << ");\n\n";
+
+    out << R"(
+    localparam IDLE            = 4'd0;
+    localparam READ_SEQ_0      = 4'd1;
+    localparam READ_SEQ_1      = 4'd2;
+    localparam READ_SEQ_2      = 4'd3;
+    localparam READ_SEQ_3      = 4'd4;
+    localparam READ_NUM_STR_HI = 4'd5;
+    localparam READ_NUM_STR_LO = 4'd6;
+    localparam READ_STR_LEN    = 4'd7;
+    localparam STREAM_CHAR     = 4'd8;
+    localparam WAIT_NFA_DONE   = 4'd9;
+    localparam WAIT_MATCH      = 4'd10;
+    localparam STORE_RESULT    = 4'd11;
+    localparam NEXT_OR_DONE    = 4'd12;
+    localparam TRIGGER_TX      = 4'd13;
+    localparam RESET_NFA       = 4'd14;
+
+    reg [3:0]  state = IDLE;
+    reg [31:0] seq_num;
+    reg [15:0] num_strings;
+    reg [15:0] str_idx;
+    reg [7:0]  cur_str_len;
+    reg [7:0]  char_idx;
+
+    always @(posedge clk) begin
+        if (rst) begin
+            state <= IDLE;
+            udp_payload_tready <= 1'b0;
+            nfa_en <= 1'b0;
+            nfa_rst <= 1'b1;
+            nfa_start <= 1'b0;
+            nfa_end_of_str <= 1'b0;
+            result_valid <= 1'b0;
+        end else begin
+            udp_payload_tready <= 1'b0;
+            result_valid <= 1'b0;
+            nfa_rst <= 1'b0;
+            nfa_start <= 1'b0;
+            nfa_end_of_str <= 1'b0;
+            nfa_en <= 1'b0;
+
+            case (state)
+                IDLE: begin
+                    udp_payload_tready <= 1'b1;
+                    if (udp_payload_tvalid) begin
+                        seq_num[31:24] <= udp_payload_tdata;
+                        state <= READ_SEQ_1;
+                    end
+                end
+                READ_SEQ_1: begin
+                    udp_payload_tready <= 1'b1;
+                    if (udp_payload_tvalid) begin
+                        seq_num[23:16] <= udp_payload_tdata;
+                        state <= READ_SEQ_2;
+                    end
+                end
+                READ_SEQ_2: begin
+                    udp_payload_tready <= 1'b1;
+                    if (udp_payload_tvalid) begin
+                        seq_num[15:8] <= udp_payload_tdata;
+                        state <= READ_SEQ_3;
+                    end
+                end
+                READ_SEQ_3: begin
+                    udp_payload_tready <= 1'b1;
+                    if (udp_payload_tvalid) begin
+                        seq_num[7:0] <= udp_payload_tdata;
+                        state <= READ_NUM_STR_HI;
+                    end
+                end
+                READ_NUM_STR_HI: begin
+                    udp_payload_tready <= 1'b1;
+                    if (udp_payload_tvalid) begin
+                        num_strings[15:8] <= udp_payload_tdata;
+                        state <= READ_NUM_STR_LO;
+                    end
+                end
+                READ_NUM_STR_LO: begin
+                    udp_payload_tready <= 1'b1;
+                    if (udp_payload_tvalid) begin
+                        num_strings[7:0] <= udp_payload_tdata;
+                        str_idx <= 0;
+                        result_seq_num <= seq_num;
+                        result_num_strings <= {num_strings[15:8], udp_payload_tdata};
+                        state <= RESET_NFA;
+                    end
+                end
+                RESET_NFA: begin
+                    nfa_rst <= 1'b1; // Hold reset for 1 cycle
+                    state <= READ_STR_LEN;
+                end
+                READ_STR_LEN: begin
+                    udp_payload_tready <= 1'b1;
+                    if (udp_payload_tvalid) begin
+                        cur_str_len <= udp_payload_tdata;
+                        char_idx <= 0;
+                        if (udp_payload_tdata == 0) state <= WAIT_NFA_DONE;
+                        else state <= STREAM_CHAR;
+                    end
+                end
+                STREAM_CHAR: begin
+                    udp_payload_tready <= 1'b1;
+                    if (udp_payload_tvalid) begin
+                        nfa_char_in <= udp_payload_tdata;
+                        nfa_en <= 1'b1;
+                        if (char_idx + 1 == cur_str_len) state <= WAIT_NFA_DONE;
+                        else char_idx <= char_idx + 1;
+                    end
+                end
+                WAIT_NFA_DONE: begin
+                    nfa_end_of_str <= 1'b1;
+                    nfa_en <= 1'b1;
+                    state <= WAIT_MATCH;
+                end
+                WAIT_MATCH: begin
+                    // Extra cycle for NFA to register final match bits
+                    nfa_en <= 1'b1; 
+                    state <= STORE_RESULT;
+                end
+                STORE_RESULT: begin
+                    result_valid <= 1'b1;
+                    result_match <= match_bus;
+                    str_idx <= str_idx + 1;
+                    state <= NEXT_OR_DONE;
+                end
+                NEXT_OR_DONE: begin
+                    if (str_idx < num_strings) begin
+                        state <= RESET_NFA;
+                    end else begin
+                        state <= TRIGGER_TX;
+                    end
+                end
+                TRIGGER_TX: begin
+                    // This state can be used to signal the result_assembler to fire the packet
+                    state <= IDLE;
+                end
+                default: state <= IDLE;
+            endcase
+        end
+    end
+endmodule
+)";
+}
+
+// =============================================================================
+// emitResultAssembler - result_assembler.v
+// =============================================================================
+void Emitter::emitResultAssembler(const std::filesystem::path &outputDir, int numRegex)
+{
+    auto filePath = outputDir / "result_assembler.v";
+    std::ofstream out(filePath);
+    out.exceptions(std::ofstream::failbit | std::ofstream::badbit);
+
+    int matchBitsBytes = (numRegex + 7) / 8;
+    int resultSizeBytes = matchBitsBytes + (numRegex * 2);
+
+    out << "`timescale 1ns / 1ps\n\n";
+    out << "module result_assembler #(\n"
+        << "    parameter NUM_REGEX = " << numRegex << "\n"
+        << ")(\n"
+        << "    input  wire        clk,\n"
+        << "    input  wire        rst,\n\n"
+        << "    // Input from parser FSM\n"
+        << "    input  wire                         result_valid,\n"
+        << "    input  wire [NUM_REGEX-1:0]        result_match,\n"
+        << "    input  wire [31:0]                 result_seq_num,\n"
+        << "    input  wire [15:0]                 result_num_strings,\n"
+        << "    input  wire [31:0]                 cycle_stamp,\n\n"
+        << "    // Match counts from top_fpga\n";
+    
+    for (int i = 0; i < numRegex; ++i) {
+        out << "    input  wire [15:0]                 match_count_" << i << ",\n";
+    }
+
+    out << "    // AXI-Stream output to udp_tx\n"
+        << "    output reg  [7:0]  m_axis_tdata,\n"
+        << "    output reg         m_axis_tvalid,\n"
+        << "    output reg         m_axis_tlast,\n"
+        << "    input  wire        m_axis_tready\n"
+        << ");\n\n";
+
+    out << "    localparam RESULT_SIZE = " << resultSizeBytes << ";\n"
+        << "    localparam MAX_RESULTS = 16;\n\n"
+        << "    reg [7:0] mem [0:8191]; // Buffer for results (8KB)\n"
+        << "    reg [12:0] write_ptr = 0;\n"
+        << "    reg [12:0] read_ptr = 0;\n"
+        << "    reg [15:0] results_count = 0;\n"
+        << "    reg [31:0] active_seq_num;\n"
+        << "    reg [15:0] active_num_strings;\n"
+        << "    reg [31:0] active_cycle_stamp;\n\n"
+        << "    localparam IDLE = 2'd0, SEND_HEADER = 2'd1, SEND_RESULTS = 2'd2;\n"
+        << "    reg [1:0] state = IDLE;\n"
+        << "    reg [10:0] send_count = 0;\n"
+        << "    reg [3:0] header_idx = 0;\n\n"
+        << "    always @(posedge clk) begin\n"
+        << "        if (rst) begin\n"
+        << "            state <= IDLE;\n"
+        << "            write_ptr <= 0;\n"
+        << "            results_count <= 0;\n"
+        << "            m_axis_tvalid <= 0;\n"
+        << "        end else begin\n"
+        << "            if (result_valid) begin\n"
+        << "                if (results_count == 0) begin\n"
+        << "                    active_seq_num <= result_seq_num;\n"
+        << "                    active_num_strings <= result_num_strings;\n"
+        << "                    active_cycle_stamp <= cycle_stamp;\n"
+        << "                    write_ptr <= 0;\n"
+        << "                end\n";
+
+    // Write match bits
+    for (int b = 0; b < matchBitsBytes; ++b) {
+        int startBit = b * 8;
+        int endBit = std::min((b + 1) * 8 - 1, numRegex - 1);
+        out << "                mem[write_ptr + " << b << "] <= {";
+        if (endBit - startBit + 1 < 8) {
+            out << (8 - (endBit - startBit + 1)) << "'b0, ";
+        }
+        for (int i = endBit; i >= startBit; --i) {
+            out << "result_match[" << i << "]" << (i > startBit ? ", " : "");
+        }
+        out << "};\n";
+    }
+
+    // Write hit counts
+    for (int i = 0; i < numRegex; ++i) {
+        out << "                mem[write_ptr + " << matchBitsBytes + (i * 2) << "] <= match_count_" << i << "[15:8];\n"
+            << "                mem[write_ptr + " << matchBitsBytes + (i * 2) + 1 << "] <= match_count_" << i << "[7:0];\n";
+    }
+
+    out << "                write_ptr <= write_ptr + RESULT_SIZE;\n"
+        << "                results_count <= results_count + 1;\n"
+        << "            end\n\n"
+        << "            case (state)\n"
+        << "                IDLE: begin\n"
+        << "                    if (results_count > 0 && results_count == active_num_strings) begin\n"
+        << "                        state <= SEND_HEADER;\n"
+        << "                        header_idx <= 0;\n"
+        << "                        read_ptr <= 0;\n"
+        << "                    end\n"
+        << "                end\n"
+        << "                SEND_HEADER: begin\n"
+        << "                    m_axis_tvalid <= 1;\n"
+        << "                    case (header_idx)\n"
+        << "                        0: m_axis_tdata <= active_seq_num[31:24];\n"
+        << "                        1: m_axis_tdata <= active_seq_num[23:16];\n"
+        << "                        2: m_axis_tdata <= active_seq_num[15:8];\n"
+        << "                        3: m_axis_tdata <= active_seq_num[7:0];\n"
+        << "                        4: m_axis_tdata <= active_num_strings[15:8];\n"
+        << "                        5: m_axis_tdata <= active_num_strings[7:0];\n"
+        << "                        6: m_axis_tdata <= active_cycle_stamp[31:24];\n"
+        << "                        7: m_axis_tdata <= active_cycle_stamp[23:16];\n"
+        << "                        8: m_axis_tdata <= active_cycle_stamp[15:8];\n"
+        << "                        9: m_axis_tdata <= active_cycle_stamp[7:0];\n"
+        << "                    endcase\n"
+        << "                    if (m_axis_tready) begin\n"
+        << "                        if (header_idx == 9) begin\n"
+        << "                            state <= SEND_RESULTS;\n"
+        << "                            send_count <= 0;\n"
+        << "                        end else header_idx <= header_idx + 1;\n"
+        << "                    end\n"
+        << "                end\n"
+        << "                SEND_RESULTS: begin\n"
+        << "                    m_axis_tvalid <= 1;\n"
+        << "                    m_axis_tdata <= mem[read_ptr];\n"
+        << "                    m_axis_tlast <= (read_ptr + 1 == write_ptr);\n"
+        << "                    if (m_axis_tready) begin\n"
+        << "                        if (read_ptr + 1 == write_ptr) begin\n"
+        << "                            state <= IDLE;\n"
+        << "                            results_count <= 0;\n"
+        << "                            m_axis_tvalid <= 0;\n"
+        << "                            m_axis_tlast <= 0;\n"
+        << "                        end else read_ptr <= read_ptr + 1;\n"
+        << "                    end\n"
+        << "                end\n"
+        << "            endcase\n"
+        << "        end\n"
+        << "    end\n"
+        << "endmodule\n";
+}
+
+// =============================================================================
 // emitTopFPGA - top_fpga.v
 // =============================================================================
 void Emitter::emitTopFPGA(const std::vector<std::unique_ptr<NFA>> &nfas, const std::filesystem::path &outputDir)
@@ -573,308 +892,140 @@ void Emitter::emitTopFPGA(const std::vector<std::unique_ptr<NFA>> &nfas, const s
     const size_t numNFAs = nfas.size();
     const std::string busHigh = std::to_string(numNFAs > 0 ? numNFAs - 1 : 0);
 
-    // File Header
-    out << "`timescale 1ns / 1ps\n\n"
-        << "// =============================================================================\n"
-        << "// top_fpga.v — FPGA Top-Level\n"
+    out << "`timescale 1ns / 1ps\n\n";
+    out << "// =============================================================================\n"
+        << "// top_fpga.v — FPGA Top-Level (Ethernet-based)\n"
         << "// Regex count: " << numNFAs << "\n"
-        << "//\n"
-        << "// Architecture:\n"
-        << "//   uart_rx → uart_rx_fifo → Control FSM → top (NFA engine)\n"
-        << "//                                         → uart_tx → host PC\n"
-        << "//\n"
-        << "// UART response packet (one line per newline received from host):\n"
-        << "//   \"MATCH=<" << numNFAs << "-bit binary> BYTES=<8 hex> HITS=<4 hex per regex,comma-sep>\\r\\n\"\n"
-        << "//\n"
-        << "// Send '?' (0x3F) to query counters without feeding the NFA.\n"
         << "// =============================================================================\n\n";
 
-    // Module Declaration
     out << "module top_fpga #(\n"
-        << "    parameter NUM_REGEX    = " << numNFAs << ",\n"
-        << "    parameter CLKS_PER_BIT = 868   // 100 MHz / 115200 baud\n"
+        << "    parameter TARGET = \"XILINX\"\n"
         << ")(\n"
-        << "    input  wire clk,\n"
-        << "    input  wire rst_btn,\n"
-        << "    input  wire uart_rx_pin,\n"
-        << "    output wire uart_tx_pin,\n"
-        << "    output reg  [" << busHigh << ":0] match_leds\n"
+        << "    input  wire       clk,\n"
+        << "    input  wire       rst_btn,\n\n"
+        << "    // Ethernet PHY pins (LAN8720A RMII)\n"
+        << "    output wire       eth_mdc,\n"
+        << "    inout  wire       eth_mdio,\n"
+        << "    output wire       eth_rstn,\n"
+        << "    input  wire       eth_crsdv,\n"
+        << "    input  wire       eth_rxerr,\n"
+        << "    input  wire [1:0] eth_rxd,\n"
+        << "    output wire       eth_txen,\n"
+        << "    output wire [1:0] eth_txd,\n"
+        << "    output wire       eth_refclk,\n\n"
+        << "    // UART TX (kept for backward compatibility/debugging)\n"
+        << "    output wire       uart_tx_pin,\n\n"
+        << "    output wire [" << busHigh << ":0] match_leds\n"
         << ");\n\n";
 
-    // uart_rx
-    out << "    // UART RX\n"
-        << "    wire [7:0] rx_data;\n"
-        << "    wire       rx_ready;\n\n"
-        << "    uart_rx #(.CLKS_PER_BIT(CLKS_PER_BIT)) uart_rx_inst (\n"
-        << "        .clk     (clk),\n"
-        << "        .rx      (uart_rx_pin),\n"
-        << "        .rx_data (rx_data),\n"
-        << "        .rx_ready(rx_ready)\n"
+    out << "    // Ethernet Parameters (from protocol.h context)\n"
+        << "    localparam [31:0] LOCAL_IP   = {8'd192, 8'd168, 8'd2, 8'd10};\n"
+        << "    localparam [47:0] LOCAL_MAC  = 48'h020000000001;\n"
+        << "    localparam [15:0] LOCAL_PORT = 16'd7777;\n"
+        << "    localparam [15:0] HOST_PORT  = 16'd7778;\n\n";
+
+    // 50 MHz Clock for Ethernet PHY
+    wire clk_50;
+    // In a real design, this would be an MMCM. For simulation/generic, we divide.
+    out << "    reg eth_refclk_reg = 0;\n"
+        << "    always @(posedge clk) eth_refclk_reg <= ~eth_refclk_reg;\n"
+        << "    assign clk_50 = eth_refclk_reg;\n"
+        << "    assign eth_refclk = clk_50;\n\n";
+
+
+    out << "    // PHY Reset\n"
+        << "    phy_reset_fsm phy_rst_inst (\n"
+        << "        .clk(clk), .rst(rst_btn), .eth_rstn(eth_rstn)\n"
         << "    );\n\n";
 
-    // FIFO
-    out << "    // Input FIFO\n"
-        << "    wire [7:0] fifo_rd_data;\n"
-        << "    wire       fifo_empty;\n"
-        << "    wire       fifo_full;\n"
-        << "    reg        fifo_rd_en = 1'b0;\n\n"
-        << "    uart_rx_fifo #(.DEPTH_LOG2(4)) rx_fifo (\n"
-        << "        .clk    (clk),\n"
-        << "        .rst    (rst_btn),\n"
-        << "        .wr_data(rx_data),\n"
-        << "        .wr_en  (rx_ready && !fifo_full),\n"
-        << "        .full   (fifo_full),\n"
-        << "        .rd_data(fifo_rd_data),\n"
-        << "        .rd_en  (fifo_rd_en),\n"
-        << "        .empty  (fifo_empty)\n"
+    out << "    // Ethernet MAC + UDP Stack\n"
+        << "    wire [7:0]  rx_udp_payload_tdata;\n"
+        << "    wire        rx_udp_payload_tvalid;\n"
+        << "    wire        rx_udp_payload_tlast;\n"
+        << "    wire        rx_udp_payload_tready;\n\n"
+        << "    wire [7:0]  tx_udp_payload_tdata;\n"
+        << "    wire        tx_udp_payload_tvalid;\n"
+        << "    wire        tx_udp_payload_tlast;\n"
+        << "    wire        tx_udp_payload_tready;\n\n"
+        << "    // Simplified instantiation of Forencich stack\n"
+        << "    // In practice, this requires connecting ARP, IP, UDP modules\n"
+        << "    // Here we use a high-level wrapper concept for the emitter output\n"
+        << "    udp_complete #(\n"
+        << "        .LOCAL_MAC(LOCAL_MAC),\n"
+        << "        .LOCAL_IP(LOCAL_IP)\n"
+        << "    ) udp_stack_inst (\n"
+        << "        .clk(clk), .rst(rst_btn),\n"
+        << "        // PHY\n"
+        << "        .m_mii_tx_en(eth_txen), .m_mii_txd(eth_txd),\n"
+        << "        .s_mii_rx_clk(eth_refclk), .s_mii_rx_dv(eth_crsdv), .s_mii_rxd(eth_rxd), .s_mii_rx_err(eth_rxerr),\n"
+        << "        // UDP RX\n"
+        << "        .m_udp_payload_tdata(rx_udp_payload_tdata), .m_udp_payload_tvalid(rx_udp_payload_tvalid),\n"
+        << "        .m_udp_payload_tlast(rx_udp_payload_tlast), .m_udp_payload_tready(rx_udp_payload_tready),\n"
+        << "        .m_udp_port(LOCAL_PORT),\n"
+        << "        // UDP TX\n"
+        << "        .s_udp_payload_tdata(tx_udp_payload_tdata), .s_udp_payload_tvalid(tx_udp_payload_tvalid),\n"
+        << "        .s_udp_payload_tlast(tx_udp_payload_tlast), .s_udp_payload_tready(tx_udp_payload_tready),\n"
+        << "        .s_udp_dest_port(HOST_PORT),\n"
+        << "        .s_udp_dest_ip(32'hC0A80264) // 192.168.2.100\n"
         << "    );\n\n";
 
-    // NFA engine
+    out << "    // Packet Parser FSM\n"
+        << "    wire nfa_en, nfa_rst, nfa_start, nfa_end_of_str;\n"
+        << "    wire [7:0] nfa_char_in;\n"
+        << "    wire result_valid;\n"
+        << "    wire [NUM_REGEX-1:0] result_match;\n"
+        << "    wire [31:0] result_seq_num;\n"
+        << "    wire [15:0] result_num_strings;\n\n"
+        << "    packet_parser_fsm #(.NUM_REGEX(NUM_REGEX)) parser_inst (\n"
+        << "        .clk(clk), .rst(rst_btn),\n"
+        << "        .udp_payload_tdata(rx_udp_payload_tdata), .udp_payload_tvalid(rx_udp_payload_tvalid),\n"
+        << "        .udp_payload_tlast(rx_udp_payload_tlast), .udp_payload_tready(rx_udp_payload_tready),\n"
+        << "        .nfa_en(nfa_en), .nfa_rst(nfa_rst), .nfa_start(nfa_start), .nfa_end_of_str(nfa_end_of_str), .nfa_char_in(nfa_char_in),\n"
+        << "        .match_bus(match_bus), .result_valid(result_valid), .result_match(result_match),\n"
+        << "        .result_seq_num(result_seq_num), .result_num_strings(result_num_strings)\n"
+        << "    );\n\n";
+
     out << "    // NFA Engine\n"
-        << "    reg                  nfa_start      = 1'b1;\n"
-        << "    reg                  nfa_end_of_str = 1'b0;\n"
-        << "    reg  [7:0]           nfa_char_in    = 8'h00;\n"
-        << "    reg                  nfa_en         = 1'b0;\n"
-        << "    wire [" << busHigh << ":0] match_bus;\n\n"
+        << "    wire [" << busHigh << ":0] match_bus;\n"
         << "    top regex_engine (\n"
-        << "        .clk        (clk),\n"
-        << "        .en         (nfa_en),\n"
-        << "        .rst        (rst_btn),\n"
-        << "        .start      (nfa_start),\n"
-        << "        .end_of_str (nfa_end_of_str),\n"
-        << "        .char_in    (nfa_char_in),\n"
-        << "        .match_bus  (match_bus)\n"
+        << "        .clk(clk), .en(nfa_en), .rst(nfa_rst || rst_btn), .start(nfa_start), .end_of_str(nfa_end_of_str), .char_in(nfa_char_in),\n"
+        << "        .match_bus(match_bus)\n"
         << "    );\n\n";
 
-    // Hardware Counters
     out << "    // Hardware Counters\n"
-        << "    reg [31:0] byte_count = 32'd0;\n"
-        << "    // One 16-bit hit counter per regex\n"
-        << "    reg [15:0] match_count [0:15];\n"
-        << "    integer ci;\n"
+        << "    reg [15:0] match_count [0:NUM_REGEX-1];\n"
+        << "    integer k;\n"
         << "    initial begin\n"
-        << "        for (ci = 0; ci < 16; ci = ci + 1)\n"
-        << "            match_count[ci] = 16'd0;\n"
-        << "    end\n\n";
-
-    // uart_tx + TX drain sub-FSM
-    out << "    // UART TX & Drain Sub-FSM\n"
-        << "    localparam TX_BUF_LEN = 128;\n"
-        << "    reg [7:0] tx_buf [0:TX_BUF_LEN-1];\n"
-        << "    reg [6:0] tx_len  = 7'd0;\n"
-        << "    reg [6:0] tx_ptr  = 7'd0;\n"
-        << "    reg       tx_send = 1'b0;  // pulse: start draining tx_buf\n\n"
-        << "    wire      tx_busy;\n"
-        << "    reg       tx_start_r = 1'b0;\n"
-        << "    reg [7:0] tx_data_r  = 8'd0;\n\n"
-        << "    uart_tx #(.CLKS_PER_BIT(CLKS_PER_BIT)) uart_tx_inst (\n"
-        << "        .clk     (clk),\n"
-        << "        .rst     (rst_btn),\n"
-        << "        .tx_data (tx_data_r),\n"
-        << "        .tx_start(tx_start_r),\n"
-        << "        .tx_busy (tx_busy),\n"
-        << "        .tx      (uart_tx_pin)\n"
-        << "    );\n\n"
-        << "    // hex nibble → ASCII character\n"
-        << "    function [7:0] hex_char;\n"
-        << "        input [3:0] nibble;\n"
-        << "        begin\n"
-        << "            hex_char = (nibble < 4'd10) ? (8'd48 + nibble) : (8'd55 + nibble);\n"
-        << "        end\n"
-        << "    endfunction\n\n"
-        << "    localparam TX_IDLE = 2'd0, TX_LOAD = 2'd1, TX_WAIT = 2'd2, TX_NEXT = 2'd3;\n"
-        << "    reg [1:0] tx_state = TX_IDLE;\n\n"
+        << "        for (k = 0; k < NUM_REGEX; k = k + 1) match_count[k] = 16'd0;\n"
+        << "    end\n"
         << "    always @(posedge clk) begin\n"
-        << "        tx_start_r <= 1'b0;\n"
         << "        if (rst_btn) begin\n"
-        << "            tx_state <= TX_IDLE;\n"
-        << "            tx_ptr   <= 7'd0;\n"
-        << "        end else begin\n"
-        << "            case (tx_state)\n"
-        << "                TX_IDLE: if (tx_send) begin tx_ptr <= 7'd0; tx_state <= TX_LOAD; end\n"
-        << "                TX_LOAD: if (!tx_busy) begin\n"
-        << "                    tx_data_r  <= tx_buf[tx_ptr];\n"
-        << "                    tx_start_r <= 1'b1;\n"
-        << "                    tx_state   <= TX_WAIT;\n"
-        << "                end\n"
-        << "                TX_WAIT: if (tx_busy)  tx_state <= TX_NEXT;\n"
-        << "                TX_NEXT: if (!tx_busy) begin\n"
-        << "                    if (tx_ptr + 1 < tx_len) begin\n"
-        << "                        tx_ptr   <= tx_ptr + 1;\n"
-        << "                        tx_state <= TX_LOAD;\n"
-        << "                    end else\n"
-        << "                        tx_state <= TX_IDLE;\n"
-        << "                end\n"
-        << "            endcase\n"
+        << "            for (k = 0; k < NUM_REGEX; k = k + 1) match_count[k] <= 16'd0;\n"
+        << "        end else if (result_valid) begin\n"
+        << "            for (k = 0; k < NUM_REGEX; k = k + 1)\n"
+        << "                if (result_match[k]) match_count[k] <= match_count[k] + 16'd1;\n"
         << "        end\n"
         << "    end\n\n";
 
-    // build_response Task
-    // The task is parameterised on the actual regex count at code-gen time
-    out << "    // build_response Task\n"
-        << "    // Fills tx_buf with the ASCII response packet in one clock cycle.\n"
-        << "    // Format: \"MATCH=<bits> BYTES=<8hex> HITS=<4hex per regex,csv>\\r\\n\"\n"
-        << "    reg [6:0]  bp;         // build pointer (local to task scope)\n"
-        << "    reg [15:0] tmp16;\n"
-        << "    integer    ri;\n\n"
-        << "    task build_response;\n"
-        << "        input [" << busHigh << ":0] mbits;\n"
-        << "        input [31:0]          bcount;\n"
-        << "        integer k;\n"
-        << "        begin : build_task\n"
-        << "            integer p;\n"
-        << "            p = 0;\n"
-        << "            // \"MATCH=\"\n"
-        << "            tx_buf[p]=8'h4D; p=p+1;  // M\n"
-        << "            tx_buf[p]=8'h41; p=p+1;  // A\n"
-        << "            tx_buf[p]=8'h54; p=p+1;  // T\n"
-        << "            tx_buf[p]=8'h43; p=p+1;  // C\n"
-        << "            tx_buf[p]=8'h48; p=p+1;  // H\n"
-        << "            tx_buf[p]=8'h3D; p=p+1;  // =\n"
-        << "            // match bits, MSB first\n";
+    out << "    // Cycle Counter\n"
+        << "    wire [31:0] cycle_stamp;\n"
+        << "    cycle_counter cycle_cnt_inst (.clk(clk), .rst(rst_btn), .count(cycle_stamp));\n\n";
 
-    // Unroll the match-bit loop at C++ code-gen time for exact bit count
-    for (int b = static_cast<int>(numNFAs) - 1; b >= 0; --b)
-    {
-        out << "            tx_buf[p] = (mbits[" << b << "]) ? 8'h31 : 8'h30; p=p+1;\n";
+    out << "    // Result Assembler\n"
+        << "    result_assembler #(.NUM_REGEX(NUM_REGEX)) assembler_inst (\n"
+        << "        .clk(clk), .rst(rst_btn),\n"
+        << "        .result_valid(result_valid), .result_match(result_match),\n"
+        << "        .result_seq_num(result_seq_num), .result_num_strings(result_num_strings),\n"
+        << "        .cycle_stamp(cycle_stamp),\n";
+    for (size_t i = 0; i < numNFAs; ++i) {
+        out << "        .match_count_" << i << "(match_count[" << i << "]),\n";
     }
+    out << "        .m_axis_tdata(tx_udp_payload_tdata), .m_axis_tvalid(tx_udp_payload_tvalid),\n"
+        << "        .m_axis_tlast(tx_udp_payload_tlast), .m_axis_tready(tx_udp_payload_tready)\n"
+        << "    );\n\n";
 
-    out << "            // \" BYTES=\"\n"
-        << "            tx_buf[p]=8'h20; p=p+1;\n"
-        << "            tx_buf[p]=8'h42; p=p+1;  // B\n"
-        << "            tx_buf[p]=8'h59; p=p+1;  // Y\n"
-        << "            tx_buf[p]=8'h54; p=p+1;  // T\n"
-        << "            tx_buf[p]=8'h45; p=p+1;  // E\n"
-        << "            tx_buf[p]=8'h53; p=p+1;  // S\n"
-        << "            tx_buf[p]=8'h3D; p=p+1;  // =\n"
-        << "            tx_buf[p]=hex_char(bcount[31:28]); p=p+1;\n"
-        << "            tx_buf[p]=hex_char(bcount[27:24]); p=p+1;\n"
-        << "            tx_buf[p]=hex_char(bcount[23:20]); p=p+1;\n"
-        << "            tx_buf[p]=hex_char(bcount[19:16]); p=p+1;\n"
-        << "            tx_buf[p]=hex_char(bcount[15:12]); p=p+1;\n"
-        << "            tx_buf[p]=hex_char(bcount[11: 8]); p=p+1;\n"
-        << "            tx_buf[p]=hex_char(bcount[ 7: 4]); p=p+1;\n"
-        << "            tx_buf[p]=hex_char(bcount[ 3: 0]); p=p+1;\n"
-        << "            // \" HITS=\"\n"
-        << "            tx_buf[p]=8'h20; p=p+1;\n"
-        << "            tx_buf[p]=8'h48; p=p+1;  // H\n"
-        << "            tx_buf[p]=8'h49; p=p+1;  // I\n"
-        << "            tx_buf[p]=8'h54; p=p+1;  // T\n"
-        << "            tx_buf[p]=8'h53; p=p+1;  // S\n"
-        << "            tx_buf[p]=8'h3D; p=p+1;  // =\n";
-
-    // Unroll the per-regex hits loop at C++ code-gen time
-    for (size_t k = 0; k < numNFAs; ++k)
-    {
-        out << "            tmp16 = match_count[" << k << "];\n"
-            << "            tx_buf[p]=hex_char(tmp16[15:12]); p=p+1;\n"
-            << "            tx_buf[p]=hex_char(tmp16[11: 8]); p=p+1;\n"
-            << "            tx_buf[p]=hex_char(tmp16[ 7: 4]); p=p+1;\n"
-            << "            tx_buf[p]=hex_char(tmp16[ 3: 0]); p=p+1;\n";
-        if (k < numNFAs - 1)
-            out << "            tx_buf[p]=8'h2C; p=p+1;  // ','\n";
-    }
-
-    out << "            tx_buf[p]=8'h0D; p=p+1;  // CR\n"
-        << "            tx_buf[p]=8'h0A; p=p+1;  // LF\n"
-        << "            tx_len = p[6:0];\n"
-        << "        end\n"
-        << "    endtask\n\n";
-
-    // Main Control FSM
-    out << "    // Main Control FSM\n"
-        << "    localparam S_IDLE      = 4'd0;\n"
-        << "    localparam S_FETCH     = 4'd1;\n"
-        << "    localparam S_DECODE    = 4'd2;\n"
-        << "    localparam S_CHAR_LOAD = 4'd3;\n"
-        << "    localparam S_CHAR_STEP = 4'd4;\n"
-        << "    localparam S_EOL_END   = 4'd5;\n"
-        << "    localparam S_EOL_MATCH = 4'd6;\n"
-        << "    localparam S_EOL_LATCH = 4'd7;\n"
-        << "    localparam S_TX_ARM    = 4'd8;\n"
-        << "    localparam S_TX_WAIT   = 4'd9;\n"
-        << "    localparam S_RESET_NFA = 4'd10;\n"
-        << "    localparam S_QUERY_TX  = 4'd11;\n\n"
-        << "    reg [3:0] state = S_RESET_NFA;\n\n"
-        << "    reg [" << busHigh << ":0] snap_match = " << numNFAs << "'b0;\n"
-        << "    reg [31:0]          snap_bytes = 32'd0;\n"
-        << "    integer k;\n\n"
-        << "    always @(posedge clk) begin\n"
-        << "        tx_send    <= 1'b0;\n"
-        << "        fifo_rd_en <= 1'b0;\n"
-        << "        nfa_en     <= 1'b0;\n"
-        << "        nfa_start  <= 1'b0;\n\n"
-        << "        if (rst_btn) begin\n"
-        << "            state      <= S_RESET_NFA;\n"
-        << "            match_leds <= " << numNFAs << "'b0;\n"
-        << "            byte_count <= 32'd0;\n"
-        << "            for (k = 0; k < 16; k = k + 1)\n"
-        << "                match_count[k] <= 16'd0;\n"
-        << "        end else begin\n"
-        << "            case (state)\n\n"
-        << "                S_IDLE: begin\n"
-        << "                    nfa_end_of_str <= 1'b0;\n"
-        << "                    if (!fifo_empty) state <= S_FETCH;\n"
-        << "                end\n\n"
-        << "                S_FETCH: begin\n"
-        << "                    fifo_rd_en <= 1'b1;\n"
-        << "                    state      <= S_DECODE;\n"
-        << "                end\n\n"
-        << "                S_DECODE: begin\n"
-        << "                    if (fifo_rd_data == 8'h0A || fifo_rd_data == 8'h0D) begin\n"
-        << "                        nfa_end_of_str <= 1'b1;\n"
-        << "                        state          <= S_EOL_END;\n"
-        << "                    end else if (fifo_rd_data == 8'h3F) begin  // '?'\n"
-        << "                        state <= S_QUERY_TX;\n"
-        << "                    end else begin\n"
-        << "                        nfa_char_in <= fifo_rd_data;\n"
-        << "                        state       <= S_CHAR_LOAD;\n"
-        << "                    end\n"
-        << "                end\n\n"
-        << "                S_CHAR_LOAD: state <= S_CHAR_STEP;\n\n"
-        << "                S_CHAR_STEP: begin\n"
-        << "                    nfa_en     <= 1'b1;\n"
-        << "                    byte_count <= byte_count + 1;\n"
-        << "                    state      <= S_IDLE;\n"
-        << "                end\n\n"
-        << "                S_EOL_END: begin\n"
-        << "                    nfa_en <= 1'b1;\n"
-        << "                    state  <= S_EOL_MATCH;\n"
-        << "                end\n\n"
-        << "                S_EOL_MATCH: begin\n"
-        << "                    nfa_en         <= 1'b1;\n"
-        << "                    nfa_end_of_str <= 1'b0;\n"
-        << "                    state          <= S_EOL_LATCH;\n"
-        << "                end\n\n"
-        << "                S_EOL_LATCH: begin\n"
-        << "                    snap_match <= match_bus;\n"
-        << "                    snap_bytes <= byte_count;\n"
-        << "                    match_leds <= match_bus;\n"
-        << "                    for (k = 0; k < " << numNFAs << "; k = k + 1)\n"
-        << "                        if (match_bus[k]) match_count[k] <= match_count[k] + 16'd1;\n"
-        << "                    state <= S_TX_ARM;\n"
-        << "                end\n\n"
-        << "                S_TX_ARM: begin\n"
-        << "                    build_response(snap_match, snap_bytes);\n"
-        << "                    tx_send <= 1'b1;\n"
-        << "                    state   <= S_TX_WAIT;\n"
-        << "                end\n\n"
-        << "                S_TX_WAIT:\n"
-        << "                    if (tx_state == TX_IDLE && !tx_send) state <= S_RESET_NFA;\n\n"
-        << "                S_RESET_NFA: begin\n"
-        << "                    nfa_start <= 1'b1;\n"
-        << "                    nfa_en    <= 1'b1;\n"
-        << "                    state     <= S_IDLE;\n"
-        << "                end\n\n"
-        << "                S_QUERY_TX: begin\n"
-        << "                    build_response(" << numNFAs << "'b0, byte_count);\n"
-        << "                    tx_send <= 1'b1;\n"
-        << "                    state   <= S_TX_WAIT;\n"
-        << "                end\n\n"
-        << "                default: state <= S_IDLE;\n"
-        << "            endcase\n"
-        << "        end\n"
-        << "    end\n\n"
+    out << "    assign match_leds = result_match[" << busHigh << ":0];\n\n"
+        << "    assign uart_tx_pin = 1'b1; // Default idle\n"
         << "endmodule\n";
 }
 
@@ -901,6 +1052,25 @@ void Emitter::emitConstraints(const std::vector<std::unique_ptr<NFA>> &nfas, con
     out << "## Buttons (Nexys A7 Center Button - BTNC)\n"
         << "set_property PACKAGE_PIN N17 [get_ports rst_btn]\n"
         << "set_property IOSTANDARD LVCMOS33 [get_ports rst_btn]\n\n";
+
+    out << "## LAN8720A Ethernet PHY (Nexys A7)\n"
+        << "set_property PACKAGE_PIN C9  [get_ports eth_mdc]\n"
+        << "set_property PACKAGE_PIN A9  [get_ports eth_mdio]\n"
+        << "set_property PACKAGE_PIN D9  [get_ports eth_rstn]\n"
+        << "set_property PACKAGE_PIN B3  [get_ports eth_crsdv]\n"
+        << "set_property PACKAGE_PIN C3  [get_ports eth_rxerr]\n"
+        << "set_property PACKAGE_PIN C10 [get_ports {eth_rxd[0]}]\n"
+        << "set_property PACKAGE_PIN C11 [get_ports {eth_rxd[1]}]\n"
+        << "set_property PACKAGE_PIN D10 [get_ports eth_txen]\n"
+        << "set_property PACKAGE_PIN A10 [get_ports {eth_txd[0]}]\n"
+        << "set_property PACKAGE_PIN A8  [get_ports {eth_txd[1]}]\n"
+        << "set_property PACKAGE_PIN D11 [get_ports eth_refclk]\n\n"
+        << "set_property IOSTANDARD LVCMOS33 [get_ports {eth_mdc eth_mdio eth_rstn eth_crsdv eth_rxerr eth_rxd eth_txen eth_txd eth_refclk}]\n\n"
+        << "## Ethernet clock constraints\n"
+        << "create_clock -period 40.0 -name eth_rx_clk [get_ports eth_crsdv]\n"
+        << "set_clock_groups -asynchronous -group [get_clocks sys_clk_pin] -group [get_clocks eth_rx_clk]\n"
+        << "set_false_path -from [get_clocks eth_rx_clk] -to [get_clocks sys_clk_pin]\n"
+        << "set_false_path -from [get_clocks sys_clk_pin] -to [get_clocks eth_rx_clk]\n\n";
 
     out << "## LEDs (Nexys A7 LED0 to LED15)\n";
     std::vector<std::string> led_pins = {
