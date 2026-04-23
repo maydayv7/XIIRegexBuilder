@@ -512,14 +512,28 @@ void Emitter::emitTopFPGA(const std::vector<std::unique_ptr<NFA>> &nfas, const s
         << "        .active_bus(active_bus)\n"
         << "    );\n\n";
 
+    out << R"(
+    // UART TX Signals
+    reg        tx_start = 1'b0;
+    reg  [7:0] tx_data = 8'h00;
+    wire       tx_busy;
+
+    uart_tx uart_tx_inst (
+        .clk(clk),
+        .tx_start(tx_start),
+        .tx_data(tx_data),
+        .tx(uart_tx_pin),
+        .tx_busy(tx_busy)
+    );
+
     // 128-Byte Latency Buffering with Precise Alignment
-    const int DELAY_VAL = 128;
-    out << "    // 128-Byte Latency Buffering with Precise Alignment\n"
-        << "    localparam DELAY_LEN = " << DELAY_VAL << ";\n"
-        << "    reg [7:0] delay_bram [0:DELAY_LEN-1];\n"
-        << "    reg [6:0] delay_ptr = 0;\n"
-        << "    reg [DELAY_LEN-1:0] commit_history = 0;\n\n"
-        << "    // Per-NFA Active Histories to isolate redaction contexts\n";
+    localparam DELAY_LEN = 128;
+    reg [7:0] delay_bram [0:DELAY_LEN-1];
+    reg [6:0] delay_ptr = 0;
+    reg [DELAY_LEN-1:0] commit_history = 0;
+
+    // Per-NFA Active Histories to isolate redaction contexts
+)";
     for (size_t i = 0; i < numNFAs; ++i) {
         out << "    reg [DELAY_LEN-1:0] active_history_" << i << " = 0;\n";
     }
@@ -589,7 +603,7 @@ void Emitter::emitTopFPGA(const std::vector<std::unique_ptr<NFA>> &nfas, const s
 
     out << "                    commit_history <= {commit_history[DELAY_LEN-2:0], 1'b0}";
     for (size_t i = 0; i < numNFAs; ++i) {
-        out << "\n                                      | (match_bus[" << i << "] ? {active_history_" << i << "[DELAY_LEN-2:0], 1'b1} : " << DELAY_VAL << "'d0)";
+        out << "\n                                      | (match_bus[" << i << "] ? {active_history_" << i << "[DELAY_LEN-2:0], 1'b1} : 128'd0)";
     }
     out << ";\n";
 
