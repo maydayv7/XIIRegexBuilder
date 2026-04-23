@@ -531,11 +531,11 @@ void Emitter::emitTopFPGA(const std::vector<std::unique_ptr<NFA>> &nfas, const s
         .tx_busy(tx_busy)
     );
 
-    // Exact-Boundary Shift-History Architecture (1024 bytes latency)
-    localparam DELAY_LEN = 1024;
+    // Exact-Boundary Shift-History Architecture (128 bytes latency)
+    localparam DELAY_LEN = 128;
     reg [7:0] delay_bram [0:DELAY_LEN-1];
-    reg [9:0] write_ptr = 0;
-    reg [9:0] read_ptr = 10'd1; // read_ptr is DELAY_LEN-1 cycles behind write_ptr
+    reg [6:0] write_ptr = 0;
+    reg [6:0] read_ptr = 7'd1; // read_ptr is DELAY_LEN-1 cycles behind write_ptr
     
     reg [DELAY_LEN-1:0] active_history = 0;
     reg [DELAY_LEN-1:0] commit_history = 0;
@@ -543,11 +543,14 @@ void Emitter::emitTopFPGA(const std::vector<std::unique_ptr<NFA>> &nfas, const s
     wire any_active = |active_bus;
     wire any_match = |match_bus;
     
-    assign uart_rts_pin = uart_cts_pin; // Flow control passthrough: stop RX if TX is blocked by host
+    // RTS: Active-low. 0 = Ready, 1 = Not Ready.
+    // We are NOT ready if tx_busy is high (simple flow control)
+    assign uart_rts_pin = tx_busy;
 
     reg rx_ready_prev = 0;
-    reg read_trigger = 0;
-    
+    reg tx_pending = 0;
+    integer k;
+
     always @(posedge clk) begin
         if (rst_btn) begin
             nfa_en <= 0;
@@ -556,14 +559,14 @@ void Emitter::emitTopFPGA(const std::vector<std::unique_ptr<NFA>> &nfas, const s
             rx_ready_prev <= 0;
             match_leds <= 0;
             write_ptr <= 0;
-            read_ptr <= 10'd1;
+            read_ptr <= 7'd1;
             active_history <= 0;
             commit_history <= 0;
-            read_trigger <= 0;
+            tx_pending <= 0;
+            for (k=0; k<DELAY_LEN; k=k+1) delay_bram[k] <= 8'h20; // Init with spaces
         end else begin
             nfa_start <= 0;
             nfa_en <= 0;
-            tx_start <= 0;
             rx_ready_prev <= rx_ready;
 
             if (rx_ready && !rx_ready_prev) begin
@@ -580,20 +583,27 @@ void Emitter::emitTopFPGA(const std::vector<std::unique_ptr<NFA>> &nfas, const s
                 // Commit match spans OR just shift
                 if (any_match) begin
                     commit_history <= {commit_history[DELAY_LEN-2:0], 1'b0} | {active_history[DELAY_LEN-2:0], any_active};
-                    match_leds <= match_bus; // Visual feedback for match
+                    match_leds <= match_bus; 
                 end else begin
                     commit_history <= {commit_history[DELAY_LEN-2:0], 1'b0};
                 end
 
                 write_ptr <= write_ptr + 1;
                 read_ptr <= read_ptr + 1;
-                read_trigger <= 1; // Trigger read-out on next cycle
-            end else if (read_trigger) begin
-                // Read Port: Fetch delayed char and apply redaction decision
-                // Redact if the oldest bit in the commit history is set
-                tx_data <= (commit_history[DELAY_LEN-1]) ? 8'h58 : delay_bram[read_ptr];
-                tx_start <= 1;
-                read_trigger <= 0;
+                tx_pending <= 1; // Mark for transmission
+            end
+
+            // Transmission Logic
+            if (tx_pending) begin
+                if (!tx_busy && !tx_start) begin
+                    tx_data <= (commit_history[DELAY_LEN-1]) ? 8'h58 : delay_bram[read_ptr];
+                    tx_start <= 1;
+                end else if (tx_busy) begin
+                    tx_start <= 0;
+                    tx_pending <= 0;
+                end
+            end else begin
+                tx_start <= 0;
             end
         end
     end
